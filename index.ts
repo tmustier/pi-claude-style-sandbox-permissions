@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -29,8 +28,6 @@ import {
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
 const EXTENSION_CONFIG_PATH = join(EXTENSION_DIR, "config.json");
 const PROJECT_CONFIG_RELATIVE_PATH = [".pi", "claude-style-permissions.json"];
-const PI_SDK_FALLBACK = "/Users/tmnexcade/.local/lib/node_modules/@earendil-works/pi-coding-agent/dist/core/sdk.js";
-
 let piSdkOverride;
 let runtimeSandboxEnabledOverride;
 
@@ -49,12 +46,9 @@ export function __resetRuntimeStateForTests() {
 
 async function loadPiSdk() {
   if (piSdkOverride) return piSdkOverride;
-  try {
-    return await import("@earendil-works/pi-coding-agent");
-  } catch (error) {
-    if (existsSync(PI_SDK_FALLBACK)) return import(PI_SDK_FALLBACK);
-    throw error;
-  }
+  const overridePath = process.env.PI_CODING_AGENT_SDK_PATH;
+  if (overridePath) return import(overridePath);
+  return import("@earendil-works/pi-coding-agent");
 }
 
 function applyRuntimeSandboxOverride(config) {
