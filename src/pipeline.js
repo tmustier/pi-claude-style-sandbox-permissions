@@ -7,8 +7,15 @@ import {
   suggestClaudeAllowRule
 } from "./policy.js";
 
+function noSandboxFallbackConfig(config) {
+  // Without an active sandbox, Claude Code-style acceptEdits shortcuts are no
+  // longer a boundary-protected fast path. Keep read-only allow rules, but make
+  // local mutations ask explicitly instead of silently running on the host.
+  return { ...config, mode: "default", sandboxActive: false };
+}
+
 function fallbackSuggestedRule(command, config) {
-  return suggestClaudeAllowRule(classifyBashCommand(command, { ...config, sandboxActive: false }));
+  return suggestClaudeAllowRule(classifyBashCommand(command, noSandboxFallbackConfig(config)));
 }
 
 function sandboxIsEnabled(config) {
@@ -26,8 +33,14 @@ export function decide(command, { config = {}, dangerouslyDisableSandbox = false
   }
 
   const safetyDecision = classifyBashSafety(command, policyConfig);
+  if (safetyDecision.behavior === "deny") {
+    return { action: "deny", reason: safetyDecision.reason };
+  }
   if (safetyDecision.behavior === "ask") {
-    return { action: "safety-ask", reason: safetyDecision.reason };
+    if (sandboxActive && dangerouslyDisableSandbox !== true) {
+      return { action: "ask-sandboxed", reason: safetyDecision.reason, safety: true };
+    }
+    return { action: "ask-unsandboxed", reason: safetyDecision.reason, safety: true };
   }
 
   const allowRule = firstMatchingBashRule(command, merged.claudeAllowRules, merged);
@@ -69,7 +82,7 @@ export function decide(command, { config = {}, dangerouslyDisableSandbox = false
     return { action: "run-sandboxed" };
   }
 
-  const fallbackDecision = classifyBashCommand(command, { ...merged, sandboxActive: false });
+  const fallbackDecision = classifyBashCommand(command, noSandboxFallbackConfig(merged));
   if (fallbackDecision.behavior === "allow") {
     return { action: "run-unsandboxed", reason: fallbackDecision.reason };
   }
