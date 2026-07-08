@@ -1,178 +1,54 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { classifyBashCommand, DEFAULT_CONFIG, formatDecision, mergeConfig, suggestClaudeAllowRule } from "./src/policy.js";
+import {
+  classifyBashCommand,
+  DEFAULT_CONFIG,
+  formatDecision,
+  mergeConfig,
+  suggestClaudeAllowRule
+} from "./src/policy.js";
+import { decide } from "./src/pipeline.js";
+import {
+  loadClaudeCodePermissionConfig,
+  persistClaudeAllowRule,
+  readJsonIfPresent
+} from "./src/claude-settings.js";
+import {
+  cleanupAfterCommand,
+  drainViolationsFor,
+  ensureSandbox,
+  formatViolationAnnotation,
+  getSandboxStatus,
+  sandboxEnabled,
+  shutdown,
+  wrapCommand
+} from "./src/sandbox.js";
 
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
 const EXTENSION_CONFIG_PATH = join(EXTENSION_DIR, "config.json");
 const PROJECT_CONFIG_RELATIVE_PATH = [".pi", "claude-style-permissions.json"];
+const PI_SDK_FALLBACK = "/Users/tmnexcade/.local/lib/node_modules/@earendil-works/pi-coding-agent/dist/core/sdk.js";
 
-function stripJsonComments(input) {
-  let output = "";
-  let quote = null;
-  let escaped = false;
+let piSdkOverride;
 
-  for (let i = 0; i < input.length; i++) {
-    const ch = input[i];
-    const next = input[i + 1];
-
-    if (escaped) {
-      output += ch;
-      escaped = false;
-      continue;
-    }
-
-    if (ch === "\\") {
-      output += ch;
-      escaped = true;
-      continue;
-    }
-
-    if (quote) {
-      output += ch;
-      if (ch === quote) quote = null;
-      continue;
-    }
-
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-      output += ch;
-      continue;
-    }
-
-    if (ch === "/" && next === "/") {
-      while (i < input.length && input[i] !== "\n") i++;
-      output += "\n";
-      continue;
-    }
-
-    if (ch === "/" && next === "*") {
-      i += 2;
-      while (i < input.length && !(input[i] === "*" && input[i + 1] === "/")) i++;
-      i++;
-      continue;
-    }
-
-    output += ch;
-  }
-
-  return output;
+export function __setPiSdkForTests(sdk) {
+  piSdkOverride = sdk;
 }
 
-function readJsonIfPresent(path) {
-  if (!existsSync(path)) return undefined;
+export function __resetPiSdkForTests() {
+  piSdkOverride = undefined;
+}
+
+async function loadPiSdk() {
+  if (piSdkOverride) return piSdkOverride;
   try {
-    return JSON.parse(stripJsonComments(readFileSync(path, "utf8")));
+    return await import("@earendil-works/pi-coding-agent");
   } catch (error) {
-    return { __configError: error instanceof Error ? error.message : String(error), __path: path };
+    if (existsSync(PI_SDK_FALLBACK)) return import(PI_SDK_FALLBACK);
+    throw error;
   }
-}
-
-function uniqueStrings(values) {
-  return [...new Set(values.filter((value) => typeof value === "string" && value.trim()).map((value) => value.trim()))];
-}
-
-function defaultClaudeSettingsPaths(ctx) {
-  const claudeHome = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
-  const paths = [join(claudeHome, "settings.json")];
-
-  // Project-local Claude Code settings can change the behavior of this Pi
-  // extension, so honor them only when Pi already trusts the project context.
-  if (ctx.isProjectTrusted?.()) {
-    paths.push(join(ctx.cwd, ".claude", "settings.json"));
-    paths.push(join(ctx.cwd, ".claude", "settings.local.json"));
-  }
-
-  return paths;
-}
-
-function resolveConfiguredClaudeSettingsPath(path, ctx) {
-  if (path.startsWith("~/")) return join(homedir(), path.slice(2));
-  if (path === "~") return homedir();
-  return isAbsolute(path) ? path : resolve(ctx.cwd, path);
-}
-
-function pathIsInside(parent, child) {
-  const rel = relative(resolve(parent), resolve(child));
-  return rel === "" || (!!rel && !rel.startsWith("..") && !isAbsolute(rel));
-}
-
-function shouldReadClaudeSettingsPath(path, ctx) {
-  if (!pathIsInside(ctx.cwd, path)) return true;
-  return ctx.isProjectTrusted?.() === true;
-}
-
-function extractClaudePermissionRules(settings) {
-  const permissions = settings?.permissions;
-  if (!permissions || typeof permissions !== "object") {
-    return { allow: [], ask: [], deny: [] };
-  }
-
-  return {
-    allow: Array.isArray(permissions.allow) ? permissions.allow : [],
-    ask: Array.isArray(permissions.ask) ? permissions.ask : [],
-    deny: Array.isArray(permissions.deny) ? permissions.deny : []
-  };
-}
-
-function getClaudeLocalSettingsPath(ctx, config) {
-  if (typeof config.writeClaudeCodeSettingsPath === "string" && config.writeClaudeCodeSettingsPath.trim()) {
-    return resolveConfiguredClaudeSettingsPath(config.writeClaudeCodeSettingsPath.trim(), ctx);
-  }
-  return join(ctx.cwd, ".claude", "settings.local.json");
-}
-
-function loadClaudeCodePermissionConfig(ctx, config) {
-  const configuredPaths = Array.isArray(config.claudeCodeSettingsPaths)
-    ? config.claudeCodeSettingsPaths.map((path) => resolveConfiguredClaudeSettingsPath(String(path), ctx))
-    : defaultClaudeSettingsPaths(ctx);
-
-  const allow = [];
-  const ask = [];
-  const deny = [];
-
-  for (const path of uniqueStrings(configuredPaths)) {
-    if (!shouldReadClaudeSettingsPath(path, ctx)) continue;
-    const settings = readJsonIfPresent(path);
-    if (!settings) continue;
-    if (settings.__configError) {
-      ctx.ui.notify?.(`claude-style-permissions: failed to parse Claude Code settings ${settings.__path}: ${settings.__configError}`, "warning");
-      continue;
-    }
-
-    const rules = extractClaudePermissionRules(settings);
-    allow.push(...rules.allow);
-    ask.push(...rules.ask);
-    deny.push(...rules.deny);
-  }
-
-  return {
-    claudeAllowRules: uniqueStrings(allow),
-    claudeAskRules: uniqueStrings(ask),
-    claudeDenyRules: uniqueStrings(deny)
-  };
-}
-
-function persistClaudeAllowRule(ctx, config, rule) {
-  const path = getClaudeLocalSettingsPath(ctx, config);
-  const existing = readJsonIfPresent(path);
-  if (existing?.__configError) {
-    ctx.ui.notify?.(`claude-style-permissions: cannot persist approval; failed to parse ${existing.__path}: ${existing.__configError}`, "error");
-    return false;
-  }
-
-  const next = existing && typeof existing === "object" ? existing : {};
-  const permissions = next.permissions && typeof next.permissions === "object" ? next.permissions : {};
-  const allow = Array.isArray(permissions.allow) ? permissions.allow.filter((value) => typeof value === "string") : [];
-
-  if (!allow.includes(rule)) allow.push(rule);
-  next.permissions = { ...permissions, allow };
-
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, "utf8");
-  ctx.ui.notify?.(`Saved Claude Code allow rule to ${path}: ${rule}`, "info");
-  return true;
 }
 
 function loadConfig(ctx) {
@@ -202,7 +78,8 @@ function loadConfig(ctx) {
   return config;
 }
 
-function compactPrompt(decision) {
+function compactPrompt(command, reason, config) {
+  const decision = classifyBashCommand(command, { ...config, sandboxActive: false });
   const details = decision.subcommands
     ?.map((part) => `• ${part.behavior}: ${part.command}${part.normalized && part.normalized !== part.command ? ` [${part.normalized}]` : ""}\n  ${part.reason}`)
     .join("\n") ?? "";
@@ -210,71 +87,266 @@ function compactPrompt(decision) {
   return [
     "Claude-style permission check wants confirmation.",
     "",
-    `Reason: ${decision.reason}`,
+    `Reason: ${reason ?? decision.reason}`,
     "",
     "Command:",
-    decision.command,
+    command,
     details ? `\nBreakdown:\n${details}` : ""
   ].join("\n");
 }
 
-export default function (pi) {
+function extendBashParameters(parameters) {
+  return {
+    ...parameters,
+    properties: {
+      ...(parameters?.properties ?? {}),
+      dangerouslyDisableSandbox: {
+        type: "boolean",
+        description: "Retry this command outside the OS sandbox. Use only after a sandbox-caused failure or explicit user request; this triggers a permission prompt unless already allow-listed."
+      }
+    }
+  };
+}
+
+function appendAnnotationText(text, annotation) {
+  if (!annotation) return text;
+  return `${text || "(no output)"}\n\n${annotation}`;
+}
+
+function appendAnnotationToResult(result, annotation, violations) {
+  if (!annotation) return result;
+  const content = Array.isArray(result.content) ? [...result.content] : [];
+  const lastTextIndex = content.map((entry) => entry?.type).lastIndexOf("text");
+  if (lastTextIndex >= 0) {
+    content[lastTextIndex] = {
+      ...content[lastTextIndex],
+      text: appendAnnotationText(content[lastTextIndex].text, annotation)
+    };
+  } else {
+    content.push({ type: "text", text: annotation });
+  }
+  return {
+    ...result,
+    content,
+    details: {
+      ...(result.details ?? {}),
+      sandboxViolations: violations.map((violation) => violation.line)
+    }
+  };
+}
+
+async function askForUnsandboxedApproval(ctx, config, command, decision, { safety = false } = {}) {
+  if (!safety && config.autoApproveAsk) return { approved: true };
+
+  if (!ctx.hasUI) {
+    if (!safety && config.noUiAskDecision === "allow") return { approved: true };
+    return { approved: false, reason: `Permission required but no UI is available: ${decision.reason}` };
+  }
+
+  const suggestedRule = safety ? undefined : (decision.suggestedRule ?? suggestClaudeAllowRule(classifyBashCommand(command, { ...config, sandboxActive: false })));
+  const approveOnce = "Yes, approve once";
+  const approveAlways = suggestedRule ? `Yes, and don't ask again for ${suggestedRule}` : undefined;
+  const deny = "No";
+  const options = approveAlways && config.persistApprovalsToClaudeCodeSettings !== false
+    ? [approveOnce, approveAlways, deny]
+    : [approveOnce, deny];
+
+  const choice = await ctx.ui.select(`${compactPrompt(command, decision.reason, config)}\n\nProceed unsandboxed?`, options);
+  if (choice === approveOnce) return { approved: true };
+  if (approveAlways && choice === approveAlways) {
+    persistClaudeAllowRule(ctx, config, suggestedRule);
+    return { approved: true };
+  }
+
+  return { approved: false, reason: "Blocked by user via claude-style-permissions" };
+}
+
+function sandboxAnnotationEnabled(config) {
+  return config.sandbox?.annotateViolations !== false;
+}
+
+function killChildProcess(child) {
+  if (!child.pid) return;
+  try {
+    if (process.platform !== "win32") process.kill(-child.pid, "SIGTERM");
+    else child.kill("SIGTERM");
+  } catch {
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      // already exited
+    }
+  }
+}
+
+function createShellStringOperations() {
+  return {
+    exec(command, cwd, { onData, signal, timeout, env } = {}) {
+      return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+          reject(new Error("aborted"));
+          return;
+        }
+
+        const child = spawn(command, {
+          cwd,
+          shell: true,
+          detached: process.platform !== "win32",
+          env: env ?? process.env,
+          stdio: ["ignore", "pipe", "pipe"],
+          windowsHide: true
+        });
+
+        let timedOut = false;
+        const timeoutHandle = timeout && timeout > 0
+          ? setTimeout(() => {
+            timedOut = true;
+            killChildProcess(child);
+          }, timeout * 1000)
+          : undefined;
+        const onAbort = () => killChildProcess(child);
+
+        child.stdout?.on("data", onData);
+        child.stderr?.on("data", onData);
+        child.on("error", (error) => {
+          if (timeoutHandle) clearTimeout(timeoutHandle);
+          signal?.removeEventListener("abort", onAbort);
+          reject(error);
+        });
+        if (signal) signal.addEventListener("abort", onAbort, { once: true });
+        child.on("close", (code) => {
+          if (timeoutHandle) clearTimeout(timeoutHandle);
+          signal?.removeEventListener("abort", onAbort);
+          if (signal?.aborted) reject(new Error("aborted"));
+          else if (timedOut) reject(new Error(`timeout:${timeout}`));
+          else resolve({ exitCode: code });
+        });
+      });
+    }
+  };
+}
+
+function createSandboxOperations(localOperations) {
+  return {
+    async exec(command, cwd, options) {
+      try {
+        return await localOperations.exec(command, cwd, options);
+      } finally {
+        cleanupAfterCommand();
+      }
+    }
+  };
+}
+
+function sandboxPromptSection() {
+  return [
+    "",
+    "## Bash OS sandbox",
+    "Bash commands run in an OS sandbox by default. The sandbox permits workspace and /tmp writes and blocks network access unless configured.",
+    "Do not set `dangerouslyDisableSandbox: true` preemptively.",
+    "If a command fails and the output shows sandbox evidence (for example Operation not permitted, denied writes outside the workspace, blocked proxy/network, or Unix socket denial), retry once with `dangerouslyDisableSandbox: true`.",
+    "That retry will ask the user for permission; briefly explain which sandbox restriction appears to be responsible.",
+    "Return to normal sandboxed Bash calls after that one retry."
+  ].join("\n");
+}
+
+export default async function (pi) {
+  const sdk = await loadPiSdk();
+  const { createBashTool } = sdk;
+  const localCwd = process.cwd();
+  const localBash = createBashTool(localCwd);
+  const localOperations = typeof sdk.createLocalBashOperations === "function"
+    ? sdk.createLocalBashOperations()
+    : createShellStringOperations();
+
   pi.registerCommand?.("permissions-check", {
-    description: "Classify a bash command with the Claude-style permission model",
+    description: "Classify a bash command with the Claude-style permission pipeline",
     handler: async (args, ctx) => {
       const command = String(args ?? "").trim();
       if (!command) {
         ctx.ui.notify("Usage: /permissions-check <bash command>", "warning");
         return;
       }
-      const decision = classifyBashCommand(command, loadConfig(ctx));
-      ctx.ui.notify(formatDecision(decision), decision.behavior === "deny" ? "error" : decision.behavior === "ask" ? "warning" : "info");
+      const config = loadConfig(ctx);
+      const sandboxStatus = sandboxEnabled(config) ? await ensureSandbox(ctx, config) : { available: false };
+      const pipelineDecision = decide(command, { config, sandboxAvailable: sandboxStatus.available });
+      const classifierDecision = classifyBashCommand(command, { ...config, sandboxActive: sandboxStatus.available });
+      const text = `${formatDecision(classifierDecision)}\nPipeline action: ${pipelineDecision.action}${pipelineDecision.reason ? ` — ${pipelineDecision.reason}` : ""}`;
+      ctx.ui.notify(text, pipelineDecision.action === "deny" ? "error" : pipelineDecision.action.includes("ask") ? "warning" : "info");
     }
   });
 
-  pi.on("session_start", async (_event, ctx) => {
-    ctx.ui.setStatus?.("claude-perms", "perms: claude-style");
+  pi.registerTool?.({
+    ...localBash,
+    parameters: extendBashParameters(localBash.parameters),
+    async execute(id, params, signal, onUpdate, ctx) {
+      const command = params?.command;
+      if (typeof command !== "string") {
+        throw new Error("Bash command must be a string");
+      }
+
+      const timeout = typeof params.timeout === "number" ? params.timeout : undefined;
+      const config = loadConfig(ctx);
+      const sandboxStatus = sandboxEnabled(config) ? await ensureSandbox(ctx, config) : { available: false };
+      const pipelineDecision = decide(command, {
+        config,
+        dangerouslyDisableSandbox: params.dangerouslyDisableSandbox === true,
+        sandboxAvailable: sandboxStatus.available
+      });
+
+      if (pipelineDecision.action === "deny") {
+        throw new Error(`Denied by claude-style-permissions: ${pipelineDecision.reason}`);
+      }
+
+      if (pipelineDecision.action === "safety-ask" || pipelineDecision.action === "ask-unsandboxed") {
+        const approval = await askForUnsandboxedApproval(ctx, config, command, pipelineDecision, {
+          safety: pipelineDecision.action === "safety-ask"
+        });
+        if (!approval.approved) {
+          throw new Error(approval.reason ?? "Blocked by claude-style-permissions");
+        }
+      }
+
+      if (pipelineDecision.action === "run-sandboxed") {
+        const wrapped = await wrapCommand(command, signal);
+        const sandboxTool = createBashTool(localCwd, { operations: createSandboxOperations(localOperations) });
+        try {
+          const result = await sandboxTool.execute(id, { command: wrapped, timeout }, signal, onUpdate, ctx);
+          if (!sandboxAnnotationEnabled(config)) return result;
+          const violations = await drainViolationsFor(command, { waitMs: 0 });
+          const annotation = formatViolationAnnotation(violations);
+          return appendAnnotationToResult(result, annotation, violations);
+        } catch (error) {
+          if (!sandboxAnnotationEnabled(config)) throw error;
+          const violations = await drainViolationsFor(command, { waitMs: 1200 });
+          const annotation = formatViolationAnnotation(violations);
+          if (!annotation) throw error;
+          const message = error instanceof Error ? error.message : String(error);
+          throw new Error(appendAnnotationText(message, annotation));
+        }
+      }
+
+      return localBash.execute(id, { command, timeout }, signal, onUpdate, ctx);
+    }
   });
 
-  pi.on("tool_call", async (event, ctx) => {
-    if (event.toolName !== "bash") return undefined;
-
-    const command = event.input?.command;
-    if (typeof command !== "string") return undefined;
-
+  pi.on?.("session_start", async (_event, ctx) => {
     const config = loadConfig(ctx);
-    const decision = classifyBashCommand(command, config);
+    ctx.ui.setStatus?.("claude-perms", sandboxEnabled(config) ? "perms: srt-sandboxed" : "perms: classify-only (sandbox disabled)");
+  });
 
-    if (decision.behavior === "allow") return undefined;
+  pi.on?.("session_shutdown", async () => {
+    await shutdown();
+  });
 
-    if (decision.behavior === "deny") {
-      return { block: true, reason: `Denied by claude-style-permissions: ${decision.reason}` };
-    }
+  pi.on?.("before_agent_start", async (event, ctx) => {
+    const config = loadConfig(ctx);
+    const status = getSandboxStatus();
+    if (!sandboxEnabled(config) || status.reason) return undefined;
+    return { systemPrompt: `${event.systemPrompt}${sandboxPromptSection()}` };
+  });
 
-    if (config.autoApproveAsk) {
-      return undefined;
-    }
-
-    if (!ctx.hasUI) {
-      if (config.noUiAskDecision === "allow") return undefined;
-      return { block: true, reason: `Permission required but no UI is available: ${decision.reason}` };
-    }
-
-    const suggestedRule = suggestClaudeAllowRule(decision);
-    const approveOnce = "Yes, approve once";
-    const approveAlways = suggestedRule ? `Yes, and don't ask again for ${suggestedRule}` : undefined;
-    const deny = "No";
-    const options = approveAlways && config.persistApprovalsToClaudeCodeSettings !== false
-      ? [approveOnce, approveAlways, deny]
-      : [approveOnce, deny];
-
-    const choice = await ctx.ui.select(`${compactPrompt(decision)}\n\nProceed?`, options);
-    if (choice === approveOnce) return undefined;
-    if (approveAlways && choice === approveAlways) {
-      persistClaudeAllowRule(ctx, config, suggestedRule);
-      return undefined;
-    }
-
-    return { block: true, reason: "Blocked by user via claude-style-permissions" };
+  pi.on?.("user_bash", () => {
+    return { operations: localOperations };
   });
 }

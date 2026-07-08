@@ -29,5 +29,14 @@
   ],
   "denyRegexes": [
     "\\brm\\s+.*--no-preserve-root"
-  ]
+  ],
+  "sandbox": {
+    "enabled": true,
+    "allowedDomains": [],
+    "allowWrite": [],
+    "denyWrite": [],
+    "denyRead": [],
+    "excludedCommands": [],
+    "annotateViolations": true
+  }
 }
