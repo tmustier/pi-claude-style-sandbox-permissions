@@ -74,19 +74,20 @@ In Pi:
 Expected:
 
 - `git rm` and the `git add && git status` chain: `run-sandboxed`, no prompt.
-- `rm -rf /`: safety ask, with no approve-always option.
+- `rm -rf /`: hard deny, no unsandboxed approval path.
 
 ## Architecture
 
 For each `bash` tool call the extension overrides Pi's built-in Bash tool and applies this pipeline:
 
 1. Explicit deny rules (`claudeDenyRules`, `denyPrefixes`, `denyRegexes`) block, including after safe wrapper normalization and inside command substitutions.
-2. Safety asks (catastrophic `rm`, `--no-preserve-root`, `curl | sh`, substitution/redirection when no sandbox is active) prompt and never offer approve-always.
-3. `dangerouslyDisableSandbox: true` requests an unsandboxed retry and prompts unless an allow rule already matches.
-4. Claude Code allow rules (`Bash(git push:*)`) run unsandboxed with no prompt.
-5. `sandbox.excludedCommands` skip the sandbox and prompt.
-6. Everything else runs in the OS sandbox with no prompt.
-7. If the sandbox is disabled or unavailable, the v1 classify-first behavior is used.
+2. Hard safety denies block catastrophic/root/system-destructive commands (`rm -rf /`, `--no-preserve-root`, recursive deletes of obvious system roots, and privileged wrappers around those forms). These commands have no unsandboxed host execution path.
+3. Safety asks (`curl | sh`, non-catastrophic recursive `rm`, substitution/redirection when no sandbox is active) prompt and never offer approve-always. When the sandbox is active, approved safety asks still run sandboxed.
+4. `dangerouslyDisableSandbox: true` requests an unsandboxed retry and prompts unless an explicit allow rule already matches; the flag itself is not an approval path.
+5. Claude Code allow rules (`Bash(git push:*)`) run unsandboxed with no prompt, except hard safety denies still win.
+6. `sandbox.excludedCommands` skip the sandbox and prompt.
+7. Everything else runs in the OS sandbox with no prompt.
+8. If the sandbox is disabled or unavailable, read-only commands may still run, but local mutations fail closed to an explicit UI approval instead of using coding-mode accept-edits shortcuts.
 
 On macOS, enforcement uses Apple's Seatbelt via `/usr/bin/sandbox-exec` through `srt`. Other platforms fall back to classify-only unless `srt` supports them and initializes successfully.
 
@@ -112,9 +113,10 @@ The system prompt tells the model:
 - default to sandboxed Bash;
 - do **not** set `dangerouslyDisableSandbox` preemptively;
 - if a command fails with sandbox evidence (`Operation not permitted`, denied writes outside the workspace, blocked proxy/network, Unix socket denial), retry once with `dangerouslyDisableSandbox: true`;
-- that retry prompts the user for approve-once / approve-always / No.
+- that retry prompts the user for approve-once / approve-always / No unless a matching explicit allow rule already exists;
+- never retry hard-denied catastrophic/root/system-destructive commands unsandboxed.
 
-Approve-always persists the suggested `Bash(<prefix>:*)` rule to `.claude/settings.local.json` using the same writer as v1.
+Approve-always persists the suggested `Bash(<prefix>:*)` rule to `.claude/settings.local.json` using the same writer as v1. Hard safety denies never get an approve-always option and cannot be approved once.
 
 ## Config
 
@@ -151,6 +153,8 @@ Copy `config.example.json` to `config.json` next to the extension, or to `.pi/cl
 
 Arrays append to defaults. Project config and project-local Claude settings are loaded only when Pi trusts the project. User Claude settings are read from `CLAUDE_CONFIG_DIR/settings.json` when set, otherwise `~/.claude/settings.json`.
 
+`autoApproveAsk` and `noUiAskDecision: "allow"` are legacy/development knobs and are fail-closed for unsandboxed execution: if no UI is available, commands that need approval are denied.
+
 Examples:
 
 - allow npm metadata/network inside sandbox: `"allowedDomains": ["registry.npmjs.org", "*.npmjs.org"]`
@@ -159,8 +163,8 @@ Examples:
 
 ## Commands, shortcut, and status
 
-- `/permissions-check <cmd>` shows both the v1 classification and the v2 pipeline action (`run-sandboxed`, `ask-unsandboxed`, etc.).
-- `Ctrl+Shift+P` toggles the sandbox for the current session only (`srt-sandboxed` ↔ `classify-only`). It does not edit config files.
+- `/permissions-check <cmd>` shows both the v1 classification and the v2 pipeline action (`run-sandboxed`, `ask-sandboxed`, `ask-unsandboxed`, etc.).
+- `Ctrl+Shift+P` toggles the sandbox for the current session only (`srt-sandboxed` ↔ `classify-only`). It does not edit config files and does not approve local mutations; classify-only mode prompts/denies instead of using sandbox-protected edit shortcuts.
 - Configure the shortcut with `"sandboxToggleShortcut": "ctrl+alt+p"`, use an array for multiple bindings, or set it to `null`, `false`, `"none"`, or `"disabled"` to disable registration.
 - Status line:
   - `perms: srt-sandboxed`
@@ -173,8 +177,8 @@ Examples:
 
 This extension protects against accidental or model-initiated Bash effects outside the configured sandbox boundary. It does **not** protect against:
 
-- destructive changes inside the workspace or `/tmp`;
-- commands you explicitly approve unsandboxed;
+- destructive changes inside the workspace or `/tmp` by commands that run sandboxed or are explicitly approved;
+- non-hard-denied commands you explicitly approve unsandboxed;
 - secrets already present in environment variables visible to Pi/Bash;
 - malicious project code that is allowed to run and damage allowed write paths;
 - other Pi extensions that override or block tools separately.

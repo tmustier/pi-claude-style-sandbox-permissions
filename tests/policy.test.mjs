@@ -29,9 +29,9 @@ test("allows the merge-conflict staging/status chain from the incident", () => {
   assert.equal(behavior(command), "allow");
 });
 
-test("does not hide dangerous commands behind background or newline operators", () => {
-  assert.equal(behavior("git status & rm -rf /"), "ask");
-  assert.equal(behavior("git status\nrm -rf /"), "ask");
+test("does not hide hard-denied commands behind background or newline operators", () => {
+  assert.equal(behavior("git status & rm -rf /"), "deny");
+  assert.equal(behavior("git status\nrm -rf /"), "deny");
 });
 
 test("asks when allowlisted read-only commands write via shell redirection", () => {
@@ -44,25 +44,25 @@ test("asks before destructive raw rm", () => {
   assert.equal(behavior("rm -rf node_modules"), "ask");
 });
 
-test("asks for catastrophic rm without denying outright", () => {
-  assert.equal(behavior("rm -rf /"), "ask");
-  assert.equal(behavior("rm -rf ."), "ask");
-  assert.equal(behavior("rm -rf /*"), "ask");
-  assert.equal(behavior("rm --no-preserve-root -rf /"), "ask");
+test("hard-denies catastrophic rm without an unsandboxed approval path", () => {
+  assert.equal(behavior("rm -rf /"), "deny");
+  assert.equal(behavior("rm -rf ."), "deny");
+  assert.equal(behavior("rm -rf /*"), "deny");
+  assert.equal(behavior("rm --no-preserve-root -rf /"), "deny");
 });
 
-test("asks for catastrophic rm targets with a trailing slash", () => {
+test("hard-denies catastrophic rm targets with a trailing slash", () => {
   // A trailing slash is a trivial way to write the same delete and must
-  // not downgrade the decision from a safety ask to a normal approval.
-  assert.equal(behavior("rm -rf ~/"), "ask");
-  assert.equal(behavior("rm -rf $HOME/"), "ask");
-  assert.equal(behavior("rm -rf ${HOME}/"), "ask");
-  assert.equal(behavior("rm -rf ./"), "ask");
-  assert.equal(behavior("rm -rf ../"), "ask");
-  assert.equal(behavior("rm -rf //"), "ask");
-  assert.equal(behavior("rm -rf ///"), "ask");
-  assert.equal(behavior("rm -rf $HOME//"), "ask");
-  assert.equal(behavior("rm -rf -- ~/"), "ask");
+  // not downgrade the decision from a hard deny to a normal approval.
+  assert.equal(behavior("rm -rf ~/"), "deny");
+  assert.equal(behavior("rm -rf $HOME/"), "deny");
+  assert.equal(behavior("rm -rf ${HOME}/"), "deny");
+  assert.equal(behavior("rm -rf ./"), "deny");
+  assert.equal(behavior("rm -rf ../"), "deny");
+  assert.equal(behavior("rm -rf //"), "deny");
+  assert.equal(behavior("rm -rf ///"), "deny");
+  assert.equal(behavior("rm -rf $HOME//"), "deny");
+  assert.equal(behavior("rm -rf -- ~/"), "deny");
   // But a genuine subdirectory under $HOME is not catastrophic (still gated as ask).
   assert.equal(behavior("rm -rf $HOME/project"), "ask");
   assert.equal(behavior("rm -rf ~/project"), "ask");
@@ -71,6 +71,17 @@ test("asks for catastrophic rm targets with a trailing slash", () => {
 test("allows non-recursive rm in coding mode but asks in default mode", () => {
   assert.equal(behavior("rm old-file.txt"), "allow");
   assert.equal(behavior("rm old-file.txt", { mode: "default" }), "ask");
+});
+
+test("hard-denies obvious root/system destructive forms through wrappers", () => {
+  assert.equal(behavior("rm -rf /System"), "deny");
+  assert.equal(behavior("rm -rf /usr/local/bin"), "deny");
+  assert.equal(behavior("sudo rm -rf /"), "deny");
+  assert.equal(behavior("sudo bash -c 'rm -rf /'"), "deny");
+  assert.equal(behavior("doas rm --no-preserve-root -rf /"), "deny");
+  assert.equal(behavior("su root -c 'rm -rf /'"), "deny");
+  assert.equal(behavior("chmod -R 777 /System"), "deny");
+  assert.equal(behavior("dd if=/dev/zero of=/dev/disk0 bs=1m"), "deny");
 });
 
 test("asks for git operations that affect remotes/history", () => {
@@ -143,7 +154,7 @@ test("uses fail-safe Claude Code rule precedence", () => {
     claudeAllowRules: ["Bash(git push:*)"],
     claudeDenyRules: ["Bash(git push:*)"]
   }), "deny");
-  assert.equal(behavior("rm -rf /", { claudeAllowRules: ["Bash(rm:*)"] }), "ask");
+  assert.equal(behavior("rm -rf /", { claudeAllowRules: ["Bash(rm:*)"] }), "deny");
   assert.equal(behavior("rm -rf /", { claudeDenyRules: ["Bash(rm:*)"] }), "deny");
 });
 

@@ -288,7 +288,7 @@ test("cancelled unsandboxed prompt blocks safely", async (t) => {
 
 test("safety asks do not offer approve-always persistence", async (t) => {
   const cwd = await makeTempProject(t);
-  const { error, selectOptions } = await runBashTool(t, "rm -rf /", {
+  const { error, selectOptions, selectPrompt } = await runBashTool(t, "rm -rf node_modules", {
     cwd,
     trusted: true,
     hasUI: true,
@@ -296,7 +296,99 @@ test("safety asks do not offer approve-always persistence", async (t) => {
   });
 
   assert.deepEqual(selectOptions, ["Yes, approve once", "No"]);
+  assert.match(selectPrompt, /Proceed sandboxed\?/);
   assert.match(error?.message, /Blocked by user/);
+});
+
+test("hard-denied root/system destructive commands never prompt or execute", async (t) => {
+  const cwd = await makeTempProject(t);
+  let prompted = false;
+  const run = await runBashTool(t, "sudo bash -c 'rm -rf /'", {
+    cwd,
+    trusted: true,
+    hasUI: true,
+    select: () => {
+      prompted = true;
+      return "Yes, approve once";
+    }
+  });
+
+  assert.match(run.error?.message, /Denied by claude-style-permissions/);
+  assert.equal(prompted, false);
+  assert.equal(run.executions.length, 0);
+});
+
+test("approved destructive workspace safety prompt still runs inside sandbox", async (t) => {
+  const cwd = await makeTempProject(t);
+  const run = await runBashTool(t, "rm -rf node_modules", {
+    cwd,
+    trusted: true,
+    hasUI: true,
+    select: (_prompt, options) => options[0]
+  });
+
+  assert.equal(run.error, undefined);
+  assert.deepEqual(run.selectOptions, ["Yes, approve once", "No"]);
+  assert.equal(run.executions.at(-1).command, "SANDBOXED(rm -rf node_modules)");
+});
+
+test("dangerouslyDisableSandbox needs real UI approval even when legacy auto-approve config is set", async (t) => {
+  const cwd = await makeTempProject(t);
+  await mkdir(join(cwd, ".pi"), { recursive: true });
+  await writeFile(join(cwd, ".pi", "claude-style-permissions.json"), JSON.stringify({
+    autoApproveAsk: true,
+    noUiAskDecision: "allow"
+  }));
+
+  const run = await runBashTool(t, "npm install", {
+    cwd,
+    trusted: true,
+    hasUI: false
+  }, { dangerouslyDisableSandbox: true });
+
+  assert.match(run.error?.message, /Permission required but no UI/);
+  assert.equal(run.executions.length, 0);
+});
+
+test("sandbox-unavailable and sandbox-disabled do not silently run local mutations", async (t) => {
+  const unavailableCwd = await makeTempProject(t);
+  const sandboxManager = makeFakeSandboxManager({ failInitialize: true });
+  const unavailable = await runBashTool(t, "git rm -f -- file.txt", {
+    cwd: unavailableCwd,
+    trusted: true,
+    hasUI: false,
+    sandboxManager
+  });
+  assert.match(unavailable.error?.message, /Permission required but no UI/);
+  assert.equal(unavailable.executions.length, 0);
+
+  const disabledCwd = await makeTempProject(t);
+  await mkdir(join(disabledCwd, ".pi"), { recursive: true });
+  await writeFile(join(disabledCwd, ".pi", "claude-style-permissions.json"), JSON.stringify({
+    sandbox: { enabled: false }
+  }));
+  const disabled = await runBashTool(t, "git rm -f -- file.txt", {
+    cwd: disabledCwd,
+    trusted: true,
+    hasUI: false
+  });
+  assert.match(disabled.error?.message, /Permission required but no UI/);
+  assert.equal(disabled.executions.length, 0);
+});
+
+test("explicit UI approval can run sandbox-unavailable fallback unsandboxed", async (t) => {
+  const cwd = await makeTempProject(t);
+  const sandboxManager = makeFakeSandboxManager({ failInitialize: true });
+  const run = await runBashTool(t, "git rm -f -- file.txt", {
+    cwd,
+    trusted: true,
+    hasUI: true,
+    sandboxManager,
+    select: (_prompt, options) => options[0]
+  });
+
+  assert.equal(run.error, undefined);
+  assert.equal(run.executions.at(-1).command, "git rm -f -- file.txt");
 });
 
 test("project settings.local Bash(git push:*) allow runs unsandboxed without prompting", async (t) => {

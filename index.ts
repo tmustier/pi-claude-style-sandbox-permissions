@@ -195,15 +195,12 @@ function appendAnnotationToResult(result, annotation, violations) {
   };
 }
 
-async function askForUnsandboxedApproval(ctx, config, command, decision, { safety = false } = {}) {
-  if (!safety && config.autoApproveAsk) return { approved: true };
-
+async function askForApproval(ctx, config, command, decision, { safety = false, target = "unsandboxed" } = {}) {
   if (!ctx.hasUI) {
-    if (!safety && config.noUiAskDecision === "allow") return { approved: true };
     return { approved: false, reason: `Permission required but no UI is available: ${decision.reason}` };
   }
 
-  const suggestedRule = safety ? undefined : (decision.suggestedRule ?? suggestClaudeAllowRule(classifyBashCommand(command, { ...config, sandboxActive: false })));
+  const suggestedRule = safety ? undefined : (decision.suggestedRule ?? suggestClaudeAllowRule(classifyBashCommand(command, { ...config, mode: "default", sandboxActive: false })));
   const approveOnce = "Yes, approve once";
   const approveAlways = suggestedRule ? `Yes, and don't ask again for ${suggestedRule}` : undefined;
   const deny = "No";
@@ -211,7 +208,7 @@ async function askForUnsandboxedApproval(ctx, config, command, decision, { safet
     ? [approveOnce, approveAlways, deny]
     : [approveOnce, deny];
 
-  const choice = await ctx.ui.select(`${compactPrompt(command, decision.reason, config)}\n\nProceed unsandboxed?`, options);
+  const choice = await ctx.ui.select(`${compactPrompt(command, decision.reason, config)}\n\nProceed ${target}?`, options);
   if (choice === approveOnce) return { approved: true };
   if (approveAlways && choice === approveAlways) {
     persistClaudeAllowRule(ctx, config, suggestedRule);
@@ -303,9 +300,10 @@ function sandboxPromptSection() {
     "",
     "## Bash OS sandbox",
     "Bash commands run in an OS sandbox by default. The sandbox permits workspace and /tmp writes and blocks network access unless configured.",
-    "Do not set `dangerouslyDisableSandbox: true` preemptively.",
+    "Do not set `dangerouslyDisableSandbox: true` preemptively; it is an escalation request, not an approval.",
     "If a command fails and the output shows sandbox evidence (for example Operation not permitted, denied writes outside the workspace, blocked proxy/network, or Unix socket denial), retry once with `dangerouslyDisableSandbox: true`.",
     "That retry will ask the user for permission; briefly explain which sandbox restriction appears to be responsible.",
+    "Do not retry hard-denied catastrophic/root/system-destructive commands unsandboxed.",
     "Return to normal sandboxed Bash calls after that one retry."
   ].join("\n");
 }
@@ -367,16 +365,7 @@ export default async function (pi) {
         throw new Error(`Denied by claude-style-permissions: ${pipelineDecision.reason}`);
       }
 
-      if (pipelineDecision.action === "safety-ask" || pipelineDecision.action === "ask-unsandboxed") {
-        const approval = await askForUnsandboxedApproval(ctx, config, command, pipelineDecision, {
-          safety: pipelineDecision.action === "safety-ask"
-        });
-        if (!approval.approved) {
-          throw new Error(approval.reason ?? "Blocked by claude-style-permissions");
-        }
-      }
-
-      if (pipelineDecision.action === "run-sandboxed") {
+      const runSandboxed = async () => {
         const wrapped = await wrapCommand(command, signal);
         const sandboxTool = createBashTool(localCwd, { operations: createSandboxOperations(localOperations) });
         try {
@@ -393,6 +382,20 @@ export default async function (pi) {
           const message = error instanceof Error ? error.message : String(error);
           throw new Error(appendAnnotationText(message, annotation));
         }
+      };
+
+      if (pipelineDecision.action === "ask-sandboxed" || pipelineDecision.action === "ask-unsandboxed") {
+        const approval = await askForApproval(ctx, config, command, pipelineDecision, {
+          safety: pipelineDecision.safety === true,
+          target: pipelineDecision.action === "ask-sandboxed" ? "sandboxed" : "unsandboxed"
+        });
+        if (!approval.approved) {
+          throw new Error(approval.reason ?? "Blocked by claude-style-permissions");
+        }
+      }
+
+      if (pipelineDecision.action === "run-sandboxed" || pipelineDecision.action === "ask-sandboxed") {
+        return runSandboxed();
       }
 
       return localBash.execute(id, { command, timeout }, signal, onUpdate, ctx);
