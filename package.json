@@ -1,7 +1,8 @@
 {
-  "name": "pi-claude-style-permissions",
+  "name": "pi-claude-style-sandbox-permissions",
   "version": "0.1.0",
-  "description": "Claude Code-inspired semantic Bash permission gate for Pi.",
+  "description": "Claude Code-inspired, srt-backed Bash sandbox and permission gate for Pi.",
+  "license": "MIT",
   "type": "module",
   "main": "./index.ts",
   "exports": {

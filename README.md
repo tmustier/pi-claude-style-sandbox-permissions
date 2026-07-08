@@ -1,6 +1,6 @@
-# pi-claude-style-permissions
+# pi-claude-style-sandbox-permissions
 
-Claude Code-style Bash permissions for Pi, implemented as an **enforce-first** extension.
+Claude Code-style Bash permissions for Pi, implemented as an **enforce-first srt sandbox extension**.
 
 v2 runs ordinary Bash commands inside `@anthropic-ai/sandbox-runtime` (`srt`) instead of trying to prove commands safe with string matching. Static classification is still used for hard denies, catastrophic safety prompts, and no-sandbox fallback.
 
