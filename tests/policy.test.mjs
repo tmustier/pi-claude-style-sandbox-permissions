@@ -84,6 +84,15 @@ test("hard-denies obvious root/system destructive forms through wrappers", () =>
   assert.equal(behavior("dd if=/dev/zero of=/dev/disk0 bs=1m"), "deny");
 });
 
+test("hard-denies catastrophic commands later in shell -c payloads", () => {
+  assert.equal(behavior("bash -c 'echo ok; rm -rf /'"), "deny");
+  assert.equal(behavior("sh -c 'echo ok && rm --no-preserve-root -rf /'"), "deny");
+  assert.equal(behavior("sudo bash -c 'echo ok; rm -rf /'"), "deny");
+  assert.equal(behavior("sudo sh -c 'printf ok | cat; chmod -R 777 /System'"), "deny");
+  assert.equal(behavior("doas bash -c 'echo ok || diskutil eraseDisk JHFS+ doomed /dev/disk0'"), "deny");
+  assert.equal(behavior("su root -c 'echo ok; rm -rf /usr/local/bin'"), "deny");
+});
+
 test("asks for git operations that affect remotes/history", () => {
   assert.equal(behavior("git push origin main"), "ask");
   assert.equal(behavior("git reset --hard HEAD~1"), "ask");

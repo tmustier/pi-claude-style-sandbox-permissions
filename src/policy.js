@@ -684,6 +684,15 @@ function shellCommandFromTokens(tokens) {
   return undefined;
 }
 
+function classifyDestructiveShellPayload(shellCommand, depth) {
+  for (const subcommand of splitShellCommand(shellCommand)) {
+    const innerTokens = normalizeTokens(tokenizeShellWords(subcommand));
+    const decision = classifyDestructiveSystemCommand(innerTokens, depth + 1);
+    if (decision?.behavior === "deny") return decision;
+  }
+  return undefined;
+}
+
 function privilegedCommandTokens(tokens) {
   if (tokens[0] === "sudo") {
     let i = 1;
@@ -719,10 +728,10 @@ function privilegedCommandTokens(tokens) {
     for (let i = 1; i < tokens.length; i++) {
       const token = tokens[i];
       if ((token === "-c" || token === "--command") && tokens[i + 1]) {
-        return tokenizeShellWords(tokens[i + 1]);
+        return ["sh", "-c", tokens[i + 1]];
       }
       if (token.startsWith("--command=") && token.length > "--command=".length) {
-        return tokenizeShellWords(token.slice("--command=".length));
+        return ["sh", "-c", token.slice("--command=".length)];
       }
     }
   }
@@ -764,8 +773,7 @@ function classifyDestructiveSystemCommand(tokens, depth = 0) {
 
   const shellCommand = shellCommandFromTokens(tokens);
   if (shellCommand) {
-    const innerTokens = normalizeTokens(tokenizeShellWords(shellCommand));
-    const decision = classifyDestructiveSystemCommand(innerTokens, depth + 1);
+    const decision = classifyDestructiveShellPayload(shellCommand, depth);
     if (decision) return { ...decision, reason: `shell command contains hard-denied operation: ${decision.reason}` };
   }
 

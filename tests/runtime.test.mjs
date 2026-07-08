@@ -303,7 +303,7 @@ test("safety asks do not offer approve-always persistence", async (t) => {
 test("hard-denied root/system destructive commands never prompt or execute", async (t) => {
   const cwd = await makeTempProject(t);
   let prompted = false;
-  const run = await runBashTool(t, "sudo bash -c 'rm -rf /'", {
+  const run = await runBashTool(t, "sudo bash -c 'echo ok; rm -rf /'", {
     cwd,
     trusted: true,
     hasUI: true,
