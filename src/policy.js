@@ -132,7 +132,16 @@ export const DEFAULT_CONFIG = {
   // substrings over the full shell command.
   claudeAllowRules: [],
   claudeAskRules: [],
-  claudeDenyRules: []
+  claudeDenyRules: [],
+  sandbox: {
+    enabled: true,
+    allowedDomains: [],
+    allowWrite: [],
+    denyWrite: [],
+    denyRead: [],
+    excludedCommands: [],
+    annotateViolations: true
+  }
 };
 
 export function mergeConfig(base = DEFAULT_CONFIG, override = {}) {
@@ -154,6 +163,19 @@ export function mergeConfig(base = DEFAULT_CONFIG, override = {}) {
       merged[key] = [...baseValues, ...override[key]];
     }
   }
+
+  if (base.sandbox || override.sandbox) {
+    const baseSandbox = base.sandbox && typeof base.sandbox === "object" ? base.sandbox : {};
+    const overrideSandbox = override.sandbox && typeof override.sandbox === "object" ? override.sandbox : {};
+    merged.sandbox = { ...baseSandbox, ...overrideSandbox };
+    for (const key of ["allowedDomains", "deniedDomains", "allowWrite", "denyWrite", "denyRead", "excludedCommands"]) {
+      if (Array.isArray(overrideSandbox[key])) {
+        const baseValues = Array.isArray(baseSandbox[key]) ? baseSandbox[key] : [];
+        merged.sandbox[key] = [...baseValues, ...overrideSandbox[key]];
+      }
+    }
+  }
+
   return merged;
 }
 
@@ -381,6 +403,17 @@ function firstMatchingRegex(command, regexes = []) {
   return undefined;
 }
 
+const SANDBOX_GATED_ASK_REGEXES = new Set(["[`]", "\\$\\("]);
+
+function firstMatchingAskRegex(command, regexes = [], sandboxActive = false) {
+  for (const pattern of regexes) {
+    if (sandboxActive && SANDBOX_GATED_ASK_REGEXES.has(pattern)) continue;
+    const regex = new RegExp(pattern, "i");
+    if (regex.test(command)) return pattern;
+  }
+  return undefined;
+}
+
 function wildcardToRegex(pattern) {
   const trimmed = String(pattern).trim();
   const escapedStar = "\u0000ESCAPED_STAR\u0000";
@@ -465,6 +498,32 @@ function claudeRuleMatches(rule, tokens, normalized) {
 
 function firstMatchingClaudeRule(tokens, normalized, rules = []) {
   return rules.find((rule) => claudeRuleMatches(rule, tokens, normalized));
+}
+
+function normalizeBashRule(rule) {
+  if (typeof rule !== "string") return rule;
+  const trimmed = rule.trim();
+  if (!trimmed) return trimmed;
+  return /^[^()]+\(.*\)$/.test(trimmed) ? trimmed : `Bash(${trimmed})`;
+}
+
+export function firstMatchingBashRule(command, rules = [], userConfig = {}) {
+  const config = mergeConfig(DEFAULT_CONFIG, userConfig);
+  const normalizedRules = rules.map(normalizeBashRule);
+  const subcommands = splitShellCommand(String(command ?? "").trim());
+
+  for (const subcommand of subcommands) {
+    const tokens = normalizeTokens(tokenizeShellWords(subcommand), config);
+    const normalized = tokens.join(" ");
+    const match = firstMatchingClaudeRule(tokens, normalized, normalizedRules);
+    if (match) return match;
+  }
+
+  return undefined;
+}
+
+export function commandMatchesBashRule(command, rules = [], userConfig = {}) {
+  return firstMatchingBashRule(command, rules, userConfig) !== undefined;
 }
 
 function targetLooksCatastrophic(target) {
@@ -693,7 +752,7 @@ function classifySubcommand(subcommand, config) {
     return { ...rmDecision, command: subcommand, normalized };
   }
 
-  const askRegex = firstMatchingRegex(normalized || subcommand, config.askRegexes);
+  const askRegex = firstMatchingAskRegex(normalized || subcommand, config.askRegexes, config.sandboxActive === true);
   if (askRegex) {
     return { behavior: "ask", reason: `matched ask regex /${askRegex}/`, command: subcommand, normalized };
   }
@@ -718,7 +777,7 @@ function classifySubcommand(subcommand, config) {
     return { behavior: "ask", reason: `matched ask prefix '${askPrefix}'`, command: subcommand, normalized };
   }
 
-  if (hasNonNullOutputRedirection(subcommand)) {
+  if (config.sandboxActive !== true && hasNonNullOutputRedirection(subcommand)) {
     return { behavior: "ask", reason: "writes output via shell redirection", command: subcommand, normalized };
   }
 
@@ -741,6 +800,59 @@ function classifySubcommand(subcommand, config) {
   return { behavior: "ask", reason: "unknown mutating command", command: subcommand, normalized };
 }
 
+function classifySafetySubcommand(subcommand, config) {
+  const rawTokens = tokenizeShellWords(subcommand);
+  const tokens = normalizeTokens(rawTokens, config);
+  const normalized = tokens.join(" ");
+
+  if (tokens.length === 0) {
+    return { behavior: "allow", reason: "empty subcommand", command: subcommand, normalized };
+  }
+
+  const rmDecision = classifyRm(tokens);
+  if (rmDecision?.behavior === "deny" || rmDecision?.behavior === "ask") {
+    return { ...rmDecision, command: subcommand, normalized };
+  }
+
+  const askRegex = firstMatchingAskRegex(normalized || subcommand, config.askRegexes, config.sandboxActive === true);
+  if (askRegex) {
+    return { behavior: "ask", reason: `matched ask regex /${askRegex}/`, command: subcommand, normalized };
+  }
+
+  if (config.sandboxActive !== true && hasNonNullOutputRedirection(subcommand)) {
+    return { behavior: "ask", reason: "writes output via shell redirection", command: subcommand, normalized };
+  }
+
+  return { behavior: "allow", reason: "no safety prompt needed", command: subcommand, normalized };
+}
+
+export function classifyBashSafety(command, userConfig = {}) {
+  const config = mergeConfig(DEFAULT_CONFIG, userConfig);
+  const trimmed = String(command ?? "").trim();
+  if (!trimmed) {
+    return { behavior: "allow", reason: "empty command", command: trimmed, subcommands: [] };
+  }
+
+  const rawAskRegex = firstMatchingAskRegex(trimmed, config.askRegexes, config.sandboxActive === true);
+  const subcommands = splitShellCommand(trimmed).map((subcommand) => classifySafetySubcommand(subcommand, config));
+
+  const asked = subcommands.find((part) => part.behavior === "ask");
+  if (asked) {
+    return { behavior: "ask", reason: asked.reason, command: trimmed, subcommands };
+  }
+
+  if (rawAskRegex) {
+    return {
+      behavior: "ask",
+      reason: `matched raw ask regex /${rawAskRegex}/`,
+      command: trimmed,
+      subcommands
+    };
+  }
+
+  return { behavior: "allow", reason: "no safety prompt needed", command: trimmed, subcommands };
+}
+
 export function classifyBashCommand(command, userConfig = {}) {
   const config = mergeConfig(DEFAULT_CONFIG, userConfig);
   const trimmed = String(command ?? "").trim();
@@ -758,7 +870,7 @@ export function classifyBashCommand(command, userConfig = {}) {
     };
   }
 
-  const rawAskRegex = firstMatchingRegex(trimmed, config.askRegexes);
+  const rawAskRegex = firstMatchingAskRegex(trimmed, config.askRegexes, config.sandboxActive === true);
   const subcommands = splitShellCommand(trimmed).map((subcommand) => classifySubcommand(subcommand, config));
 
   const denied = subcommands.find((part) => part.behavior === "deny");

@@ -23,5 +23,8 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "^0.70.2"
+  },
+  "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "0.0.64"
   }
 }
