@@ -1,98 +1,54 @@
 # pi-claude-style-permissions
 
-A small Pi extension that applies a Claude Code-inspired permission pipeline to Bash tool calls.
+Claude Code-style Bash permissions for Pi, implemented as an **enforce-first** extension.
 
-It is intended as a replacement/refinement for raw wildcard rules like `"* rm *": "deny"`, which incorrectly block safe commands such as `git rm -- path`.
+v2 runs ordinary Bash commands inside `@anthropic-ai/sandbox-runtime` (`srt`) instead of trying to prove commands safe with string matching. Static classification is still used for hard denies, catastrophic safety prompts, and no-sandbox fallback.
 
-## What this extension does
+## Architecture
 
-For each Bash command, it:
+For each `bash` tool call the extension overrides Pi's built-in Bash tool and applies this pipeline:
 
-1. Splits compound commands into shell-level subcommands (`&&`, `||`, `|`, `;`, `&`, and newlines) while respecting quotes.
-2. Normalizes safe wrappers (`timeout 10 git status`, env assignments, etc.).
-3. Applies **deny** checks first.
-4. Applies **ask** checks second.
-5. Allows known read-only commands.
-6. In `mode: "coding"`, allows normal local edit/index operations similar to Claude Code's `acceptEdits` fast path:
-   - `git add`, `git rm`, `git mv`
-   - `git checkout --ours`, `git checkout --theirs`
-   - `mkdir`, `touch`, non-recursive `rm`, `mv`, `cp`, `sed`
-7. Prompts for unknown mutating commands instead of trying to infer safety from raw substrings.
+1. Explicit deny rules (`claudeDenyRules`, `denyPrefixes`, `denyRegexes`) block.
+2. Safety asks (catastrophic `rm`, `--no-preserve-root`, `curl | sh`, substitution/redirection when no sandbox is active) prompt and never offer approve-always.
+3. `dangerouslyDisableSandbox: true` requests an unsandboxed retry and prompts unless an allow rule already matches.
+4. Claude Code allow rules (`Bash(git push:*)`) run unsandboxed with no prompt.
+5. `sandbox.excludedCommands` skip the sandbox and prompt.
+6. Everything else runs in the OS sandbox with no prompt.
+7. If the sandbox is disabled or unavailable, the v1 classify-first behavior is used.
 
-## Important limitation
+On macOS, enforcement uses Apple's Seatbelt via `/usr/bin/sandbox-exec` through `srt`. Other platforms fall back to classify-only unless `srt` supports them and initializes successfully.
 
-Pi `tool_call` extensions can block or prompt, but they cannot override a block from another loaded extension. If Charlie keeps the old permission extension with `"* rm *": "deny"`, that old extension can still block `git rm` before/after this one runs.
+## Sandbox defaults
 
-Use this extension **instead of** the old raw wildcard Bash filter, or remove/downgrade the old hard-deny rules.
+Sandboxed commands can write to:
 
-## Install locally
+- the current Pi workspace (`ctx.cwd`)
+- `/tmp`
+- Node's `os.tmpdir()`
+- any configured `sandbox.allowWrite` paths
 
-For testing:
+Network is blocked by default (`sandbox.allowedDomains: []`). Read access is broad except a short sensitive default deny list: `~/.ssh`, `~/.aws`, `~/.gnupg` plus `sandbox.denyRead`.
 
-```bash
-pi -e /path/to/pi-claude-style-permissions/index.ts
-```
+When the OS blocks a command, the result is annotated with recorded sandbox violations when available, e.g. `[sandbox] 1 violation(s): ...`.
 
-For global auto-discovery:
+## Escalation protocol for the model
 
-```bash
-cp -R /path/to/pi-claude-style-permissions ~/.pi/agent/extensions/pi-claude-style-permissions
-pi
-```
+The Bash schema includes `dangerouslyDisableSandbox?: boolean`.
 
-Then `/reload` after edits.
+The system prompt tells the model:
+
+- default to sandboxed Bash;
+- do **not** set `dangerouslyDisableSandbox` preemptively;
+- if a command fails with sandbox evidence (`Operation not permitted`, denied writes outside the workspace, blocked proxy/network, Unix socket denial), retry once with `dangerouslyDisableSandbox: true`;
+- that retry prompts the user for approve-once / approve-always / No.
+
+Approve-always persists the suggested `Bash(<prefix>:*)` rule to `.claude/settings.local.json` using the same writer as v1.
 
 ## Config
 
-Optional extension-level config:
+Copy `config.example.json` to `config.json` next to the extension, or to `.pi/claude-style-permissions.json` in a trusted project.
 
-```bash
-cp config.example.json config.json
-```
-
-Optional project-level config, loaded only for trusted projects:
-
-```bash
-mkdir -p .pi
-cp config.example.json .pi/claude-style-permissions.json
-```
-
-Arrays append to defaults. Scalar values override defaults. The parser tolerates `//` and `/* ... */` comments, but files must otherwise be valid JSON (trailing commas are rejected with a warning).
-
-By default, the extension also imports Claude Code Bash permission rules from:
-
-```text
-~/.claude/settings.json
-.claude/settings.json          # only when Pi trusts the project
-.claude/settings.local.json    # only when Pi trusts the project
-```
-
-Project-local `.claude/settings*.json` files are honored only when Pi trusts the project. Precedence is fail-safe: hard denies win; built-in safety asks such as catastrophic `rm` run before imported allow rules; then ask rules; then imported allow rules.
-
-When a command needs confirmation, the prompt normally offers:
-
-- `Yes, approve once`
-- `Yes, and don't ask again for Bash(<prefix>:*)`
-- `No`
-
-For safety asks such as recursive `rm`, the approve-always option is intentionally suppressed. The normal approve-always option writes the allow rule to `.claude/settings.local.json` by default, so Claude Code and Pi share the same permission memory.
-
-It reads `permissions.allow`, `permissions.ask`, and `permissions.deny` entries that use Claude Code syntax such as:
-
-```json
-{
-  "permissions": {
-    "allow": ["Bash(git rm:*)", "Bash(git add:*)"],
-    "ask": ["Bash(docker:*)"]
-  }
-}
-```
-
-Only Bash/Shell rules are imported; file/tool rules like `Read(...)` are ignored by this Bash gate.
-
-Useful settings:
-
-```json
+```jsonc
 {
   "mode": "coding",
   "noUiAskDecision": "deny",
@@ -105,26 +61,54 @@ Useful settings:
     ".claude/settings.json",
     ".claude/settings.local.json"
   ],
-  "allowPrefixes": ["my safe command"],
-  "askPrefixes": ["my risky command"],
-  "denyPrefixes": ["my forbidden command"],
-  "askRegexes": ["pattern"],
-  "denyRegexes": ["pattern"]
+  "claudeAllowRules": ["Bash(git push:*)"],
+  "claudeAskRules": [],
+  "claudeDenyRules": [],
+  "sandbox": {
+    "enabled": true,
+    "allowedDomains": [],
+    "allowWrite": [],
+    "denyWrite": [],
+    "denyRead": [],
+    "excludedCommands": [],
+    "annotateViolations": true
+  }
 }
 ```
 
-## Debug command
+Arrays append to defaults. Project config and project-local Claude settings are loaded only when Pi trusts the project. User Claude settings are read from `CLAUDE_CONFIG_DIR/settings.json` when set, otherwise `~/.claude/settings.json`.
 
-Inside Pi:
+Examples:
 
-```text
-/permissions-check git add file && git status --short | grep '^U' || true
-```
+- allow npm metadata/network inside sandbox: `"allowedDomains": ["registry.npmjs.org", "*.npmjs.org"]`
+- allow a cache directory to be written in sandbox: `"allowWrite": ["~/.cache/my-tool"]`
+- force Docker to prompt unsandboxed: `"excludedCommands": ["Bash(docker:*)"]`
 
-Expected result: `ALLOW`.
+## Commands and status
+
+- `/permissions-check <cmd>` shows both the v1 classification and the v2 pipeline action (`run-sandboxed`, `ask-unsandboxed`, etc.).
+- Status line:
+  - `perms: srt-sandboxed`
+  - `perms: classify-only (srt unavailable)`
+  - `perms: classify-only (sandbox disabled)`
+- User `!` / `!!` shell commands run unsandboxed because the human typed them.
+
+## Threat model / non-goals
+
+This extension protects against accidental or model-initiated Bash effects outside the configured sandbox boundary. It does **not** protect against:
+
+- destructive changes inside the workspace or `/tmp`;
+- commands you explicitly approve unsandboxed;
+- secrets already present in environment variables visible to Pi/Bash;
+- malicious project code that is allowed to run and damage allowed write paths;
+- other Pi extensions that override or block tools separately.
+
+Keep backups/git history for workspace damage. Treat approve-always rules as trust decisions.
 
 ## Test
 
 ```bash
 npm test
+node --check index.ts src/*.js
+npm pack --dry-run
 ```
