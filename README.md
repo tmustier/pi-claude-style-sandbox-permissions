@@ -4,6 +4,78 @@ Claude Code-style Bash permissions for Pi, implemented as an **enforce-first srt
 
 v2 runs ordinary Bash commands inside `@anthropic-ai/sandbox-runtime` (`srt`) instead of trying to prove commands safe with string matching. Static classification is still used for hard denies, catastrophic safety prompts, and no-sandbox fallback.
 
+## Install
+
+> Security note: Pi extensions run with your full system permissions. Review the source before installing any third-party extension.
+
+### Recommended: install from GitHub
+
+```bash
+pi install git:github.com/tmustier/pi-claude-style-sandbox-permissions
+```
+
+Then restart Pi, or run `/reload` in an existing Pi session.
+
+Pi will clone the package under `~/.pi/agent/git/...`, install runtime dependencies, and load the extension declared in `package.json`.
+
+### Try temporarily without installing
+
+```bash
+pi -e git:github.com/tmustier/pi-claude-style-sandbox-permissions
+```
+
+This loads the package for that Pi run only.
+
+### Install from a local checkout
+
+```bash
+git clone https://github.com/tmustier/pi-claude-style-sandbox-permissions.git
+cd pi-claude-style-sandbox-permissions
+npm install
+pi install "$PWD"
+```
+
+Then restart Pi or run `/reload`.
+
+### Manual auto-discovery install
+
+If you prefer Pi's extension auto-discovery directories:
+
+```bash
+git clone https://github.com/tmustier/pi-claude-style-sandbox-permissions.git \
+  ~/.pi/agent/extensions/pi-claude-style-sandbox-permissions
+cd ~/.pi/agent/extensions/pi-claude-style-sandbox-permissions
+npm install
+```
+
+Then run `/reload` in Pi. Project-local install is also possible at `.pi/extensions/pi-claude-style-sandbox-permissions` after the project is trusted.
+
+### If replacing another permission extension
+
+Disable older Bash permission gates before testing this one, especially raw wildcard rules such as:
+
+```json
+"* rm *": "deny",
+"rm *": "deny"
+```
+
+One extension cannot override another extension's hard block.
+
+### Smoke test after install
+
+In Pi:
+
+```text
+/permissions-check git rm -f -- path/to/file.py
+/permissions-check git add -- foo && git status --short | grep '^U' || true
+/permissions-check rm -rf /
+```
+
+Expected:
+
+- `git rm` and the `git add && git status` chain: `run-sandboxed`, no prompt.
+- `rm -rf /`: safety ask, with no approve-always option.
+
 ## Architecture
 
 For each `bash` tool call the extension overrides Pi's built-in Bash tool and applies this pipeline:
