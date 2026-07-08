@@ -87,10 +87,23 @@ test("hard-denies obvious root/system destructive forms through wrappers", () =>
 test("hard-denies catastrophic commands later in shell -c payloads", () => {
   assert.equal(behavior("bash -c 'echo ok; rm -rf /'"), "deny");
   assert.equal(behavior("sh -c 'echo ok && rm --no-preserve-root -rf /'"), "deny");
+  assert.equal(behavior("bash --norc -c 'echo ok; rm -rf /'"), "deny");
+  assert.equal(behavior("bash --rcfile /tmp/x -c 'echo ok; rm -rf /'"), "deny");
   assert.equal(behavior("sudo bash -c 'echo ok; rm -rf /'"), "deny");
+  assert.equal(behavior("sudo bash --norc -c 'echo ok; rm -rf /'"), "deny");
   assert.equal(behavior("sudo sh -c 'printf ok | cat; chmod -R 777 /System'"), "deny");
   assert.equal(behavior("doas bash -c 'echo ok || diskutil eraseDisk JHFS+ doomed /dev/disk0'"), "deny");
+  assert.equal(behavior("doas bash --rcfile /tmp/x -c 'echo ok; rm -rf /'"), "deny");
   assert.equal(behavior("su root -c 'echo ok; rm -rf /usr/local/bin'"), "deny");
+});
+
+test("hard-denies catastrophic commands in shell payload constructs and substitutions", () => {
+  assert.equal(behavior("bash -c 'if true; then rm -rf /; fi'"), "deny");
+  assert.equal(behavior("bash -c 'echo $(rm -rf /)'"), "deny");
+  assert.equal(behavior("bash -c '(rm -rf /)'"), "deny");
+  assert.equal(behavior("bash -c '{ chmod -R 777 /System; }'"), "deny");
+  assert.equal(behavior("sudo bash --norc -c 'if true; then rm -rf /; fi'"), "deny");
+  assert.equal(behavior("doas bash --rcfile /tmp/x -c 'echo $(rm -rf /)'"), "deny");
 });
 
 test("asks for git operations that affect remotes/history", () => {

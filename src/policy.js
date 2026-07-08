@@ -672,23 +672,94 @@ function commandBasename(command) {
   return String(command ?? "").split("/").pop();
 }
 
+const SHELL_LONG_OPTIONS_WITH_ARG = new Set(["--init-file", "--rcfile"]);
+const SHELL_SHORT_OPTIONS_WITH_ARG = new Set(["-o", "-O", "+O"]);
+const SHELL_PAYLOAD_PREFIX_KEYWORDS = new Set([
+  "!",
+  "case",
+  "do",
+  "elif",
+  "else",
+  "for",
+  "function",
+  "if",
+  "in",
+  "select",
+  "then",
+  "time",
+  "until",
+  "while"
+]);
+
 function shellCommandFromTokens(tokens) {
   if (!SHELL_COMMANDS.has(commandBasename(tokens[0]))) return undefined;
   let i = 1;
   while (i < tokens.length) {
     const token = tokens[i];
-    if (token === "-c" || token === "--command") return tokens[i + 1];
-    if (token.startsWith("-") && token.includes("c")) return tokens[i + 1];
-    i++;
+    if (token === "--") return undefined;
+    if (token === "-c") return tokens[i + 1];
+    if (/^-[^-].*c/.test(token)) return tokens[i + 1];
+
+    if (token.startsWith("--")) {
+      const [option] = token.split("=", 1);
+      i += SHELL_LONG_OPTIONS_WITH_ARG.has(option) && !token.includes("=") ? 2 : 1;
+      continue;
+    }
+
+    if (SHELL_SHORT_OPTIONS_WITH_ARG.has(token)) {
+      i += 2;
+      continue;
+    }
+
+    if ((token.startsWith("-") || token.startsWith("+")) && token.length > 1) {
+      i++;
+      continue;
+    }
+
+    return undefined;
   }
   return undefined;
 }
 
+function cleanShellPayloadToken(token) {
+  let t = String(token ?? "").trim();
+  while (t.startsWith("(") || t.startsWith("{")) t = t.slice(1);
+  while (t.endsWith(")") || t.endsWith("}") || t.endsWith(";")) t = t.slice(0, -1);
+  return t;
+}
+
+function classifyDestructiveShellTokenRun(tokens, depth) {
+  const cleaned = tokens.map(cleanShellPayloadToken).filter(Boolean);
+  while (cleaned.length > 0 && SHELL_PAYLOAD_PREFIX_KEYWORDS.has(cleaned[0])) cleaned.shift();
+  if (cleaned.length === 0) return undefined;
+  return classifyDestructiveSystemCommand(normalizeTokens(cleaned), depth + 1);
+}
+
+function shellPayloadCommandStartIndexes(tokens) {
+  const indexes = new Set([0]);
+  tokens.forEach((token, index) => {
+    const cleaned = cleanShellPayloadToken(token);
+    if (cleaned === "" || SHELL_PAYLOAD_PREFIX_KEYWORDS.has(cleaned) || token.includes("{") || token.includes("(")) {
+      indexes.add(index + 1);
+    }
+  });
+  return [...indexes].filter((index) => index < tokens.length);
+}
+
 function classifyDestructiveShellPayload(shellCommand, depth) {
+  if (depth > 4) return undefined;
+
+  for (const substitution of extractCommandSubstitutions(shellCommand)) {
+    const decision = classifyDestructiveShellPayload(substitution, depth + 1);
+    if (decision?.behavior === "deny") return { ...decision, reason: `command substitution contains hard-denied operation: ${decision.reason}` };
+  }
+
   for (const subcommand of splitShellCommand(shellCommand)) {
-    const innerTokens = normalizeTokens(tokenizeShellWords(subcommand));
-    const decision = classifyDestructiveSystemCommand(innerTokens, depth + 1);
-    if (decision?.behavior === "deny") return decision;
+    const rawTokens = tokenizeShellWords(subcommand);
+    for (const index of shellPayloadCommandStartIndexes(rawTokens)) {
+      const decision = classifyDestructiveShellTokenRun(rawTokens.slice(index), depth);
+      if (decision?.behavior === "deny") return decision;
+    }
   }
   return undefined;
 }
