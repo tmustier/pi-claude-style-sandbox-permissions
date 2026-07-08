@@ -7,6 +7,7 @@ export const DEFAULT_CONFIG = {
   mode: "coding",
   noUiAskDecision: "deny",
   autoApproveAsk: false,
+  sandboxToggleShortcut: "ctrl+shift+p",
   safeWrappers: DEFAULT_SAFE_WRAPPERS,
   allowPrefixes: [
     "pwd",

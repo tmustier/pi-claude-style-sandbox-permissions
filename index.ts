@@ -32,6 +32,7 @@ const PROJECT_CONFIG_RELATIVE_PATH = [".pi", "claude-style-permissions.json"];
 const PI_SDK_FALLBACK = "/Users/tmnexcade/.local/lib/node_modules/@earendil-works/pi-coding-agent/dist/core/sdk.js";
 
 let piSdkOverride;
+let runtimeSandboxEnabledOverride;
 
 export function __setPiSdkForTests(sdk) {
   piSdkOverride = sdk;
@@ -39,6 +40,11 @@ export function __setPiSdkForTests(sdk) {
 
 export function __resetPiSdkForTests() {
   piSdkOverride = undefined;
+  runtimeSandboxEnabledOverride = undefined;
+}
+
+export function __resetRuntimeStateForTests() {
+  runtimeSandboxEnabledOverride = undefined;
 }
 
 async function loadPiSdk() {
@@ -49,6 +55,17 @@ async function loadPiSdk() {
     if (existsSync(PI_SDK_FALLBACK)) return import(PI_SDK_FALLBACK);
     throw error;
   }
+}
+
+function applyRuntimeSandboxOverride(config) {
+  if (runtimeSandboxEnabledOverride === undefined) return config;
+  return {
+    ...config,
+    sandbox: {
+      ...(config.sandbox ?? {}),
+      enabled: runtimeSandboxEnabledOverride
+    }
+  };
 }
 
 function loadConfig(ctx) {
@@ -75,7 +92,56 @@ function loadConfig(ctx) {
     config = mergeConfig(config, loadClaudeCodePermissionConfig(ctx, config));
   }
 
-  return config;
+  return applyRuntimeSandboxOverride(config);
+}
+
+export function normalizeSandboxToggleShortcuts(value = DEFAULT_CONFIG.sandboxToggleShortcut) {
+  if (value === false || value === null) return [];
+  const values = Array.isArray(value) ? value : [value];
+  return values
+    .filter((entry) => typeof entry === "string")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry) => entry && entry !== "none" && entry !== "disabled");
+}
+
+function loadConfiguredSandboxToggleShortcuts() {
+  let config = DEFAULT_CONFIG;
+  const extensionConfig = readJsonIfPresent(EXTENSION_CONFIG_PATH);
+  if (extensionConfig && !extensionConfig.__configError) {
+    config = mergeConfig(config, extensionConfig);
+  }
+  return normalizeSandboxToggleShortcuts(config.sandboxToggleShortcut);
+}
+
+function setPermissionStatus(ctx, config, reason) {
+  if (!sandboxEnabled(config)) {
+    ctx.ui.setStatus?.("claude-perms", reason === "shortcut"
+      ? "perms: classify-only (shortcut override)"
+      : "perms: classify-only (sandbox disabled)");
+    return;
+  }
+  const status = getSandboxStatus();
+  ctx.ui.setStatus?.("claude-perms", status.reason ? "perms: classify-only (srt unavailable)" : "perms: srt-sandboxed");
+}
+
+async function toggleSandboxForSession(ctx) {
+  const currentConfig = loadConfig(ctx);
+  const nextEnabled = !sandboxEnabled(currentConfig);
+  runtimeSandboxEnabledOverride = nextEnabled;
+  const nextConfig = loadConfig(ctx);
+
+  if (!nextEnabled) {
+    setPermissionStatus(ctx, nextConfig, "shortcut");
+    ctx.ui.notify?.("Claude-style permission sandbox disabled for this session; using classify-only checks.", "warning");
+    return;
+  }
+
+  const status = await ensureSandbox(ctx, nextConfig);
+  if (status.available) {
+    ctx.ui.notify?.("Claude-style permission sandbox enabled for this session.", "info");
+  } else {
+    ctx.ui.notify?.(`Claude-style permission sandbox requested, but srt is unavailable; staying classify-only: ${status.reason ?? "unknown error"}`, "warning");
+  }
 }
 
 function compactPrompt(command, reason, config) {
@@ -259,6 +325,15 @@ export default async function (pi) {
     ? sdk.createLocalBashOperations()
     : createShellStringOperations();
 
+  for (const shortcut of loadConfiguredSandboxToggleShortcuts()) {
+    pi.registerShortcut?.(shortcut, {
+      description: "Toggle Claude-style permission sandbox for this session",
+      handler: async (ctx) => {
+        await toggleSandboxForSession(ctx);
+      }
+    });
+  }
+
   pi.registerCommand?.("permissions-check", {
     description: "Classify a bash command with the Claude-style permission pipeline",
     handler: async (args, ctx) => {
@@ -332,7 +407,7 @@ export default async function (pi) {
 
   pi.on?.("session_start", async (_event, ctx) => {
     const config = loadConfig(ctx);
-    ctx.ui.setStatus?.("claude-perms", sandboxEnabled(config) ? "perms: srt-sandboxed" : "perms: classify-only (sandbox disabled)");
+    setPermissionStatus(ctx, config);
   });
 
   pi.on?.("session_shutdown", async () => {

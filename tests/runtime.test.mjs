@@ -3,7 +3,12 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import extension, { __resetPiSdkForTests, __setPiSdkForTests } from "../index.ts";
+import extension, {
+  __resetPiSdkForTests,
+  __resetRuntimeStateForTests,
+  __setPiSdkForTests,
+  normalizeSandboxToggleShortcuts
+} from "../index.ts";
 import { __resetSandboxStateForTests, __setSandboxManagerForTests } from "../src/sandbox.js";
 
 function makeFakeSdk(executions) {
@@ -92,6 +97,7 @@ function makeFakeSandboxManager({ failInitialize = false, violations = [] } = {}
 async function installExtension(t, { sandboxManager } = {}) {
   const handlers = new Map();
   const commands = new Map();
+  const shortcuts = new Map();
   const tools = new Map();
   const executions = [];
   __setPiSdkForTests(makeFakeSdk(executions));
@@ -107,12 +113,15 @@ async function installExtension(t, { sandboxManager } = {}) {
     registerCommand(name, options) {
       commands.set(name, options);
     },
+    registerShortcut(key, options) {
+      shortcuts.set(key, options);
+    },
     registerTool(tool) {
       tools.set(tool.name, tool);
     }
   };
   await extension(pi);
-  return { handlers, commands, tools, executions };
+  return { handlers, commands, shortcuts, tools, executions };
 }
 
 async function makeTempProject(t) {
@@ -174,20 +183,54 @@ async function runBashTool(t, command, options = {}, params = {}) {
   return { ...installed, ...context, tool, result, error };
 }
 
-test("registers bash override, command, lifecycle hooks, and extended schema", async (t) => {
+test("registers bash override, command, shortcut, lifecycle hooks, and extended schema", async (t) => {
   const cwd = await makeTempProject(t);
-  const { handlers, commands, tools } = await installExtension(t);
+  const { handlers, commands, shortcuts, tools } = await installExtension(t);
   assert.equal(typeof handlers.get("session_start"), "function");
   assert.equal(typeof handlers.get("session_shutdown"), "function");
   assert.equal(typeof handlers.get("before_agent_start"), "function");
   assert.equal(typeof handlers.get("user_bash"), "function");
   assert.equal(typeof commands.get("permissions-check")?.handler, "function");
+  assert.equal(typeof shortcuts.get("ctrl+shift+p")?.handler, "function");
   const bash = tools.get("bash");
   assert.equal(bash.parameters.properties.dangerouslyDisableSandbox.type, "boolean");
 
   const context = await makeContext({ cwd });
   await handlers.get("session_start")({}, context.ctx);
   assert.equal(context.statuses.at(-1).value, "perms: srt-sandboxed");
+});
+
+test("normalizes configurable sandbox toggle shortcuts", () => {
+  assert.deepEqual(normalizeSandboxToggleShortcuts(), ["ctrl+shift+p"]);
+  assert.deepEqual(normalizeSandboxToggleShortcuts(" Ctrl+Alt+P "), ["ctrl+alt+p"]);
+  assert.deepEqual(normalizeSandboxToggleShortcuts(["ctrl+shift+p", " alt+p ", "none", ""]), ["ctrl+shift+p", "alt+p"]);
+  assert.deepEqual(normalizeSandboxToggleShortcuts(null), []);
+  assert.deepEqual(normalizeSandboxToggleShortcuts(false), []);
+  assert.deepEqual(normalizeSandboxToggleShortcuts("disabled"), []);
+});
+
+test("sandbox toggle shortcut switches the current session between sandboxed and classify-only", async (t) => {
+  const cwd = await makeTempProject(t);
+  const { shortcuts, tools, executions } = await installExtension(t);
+  const context = await makeContext({ cwd, hasUI: false });
+  const shortcut = shortcuts.get("ctrl+shift+p");
+  const tool = tools.get("bash");
+
+  await shortcut.handler(context.ctx);
+  assert.equal(context.statuses.at(-1).value, "perms: classify-only (shortcut override)");
+  assert.equal(context.notifications.at(-1).level, "warning");
+
+  await tool.execute("tool-1", { command: "git status --short" }, undefined, undefined, context.ctx);
+  assert.equal(executions.at(-1).command, "git status --short");
+
+  await shortcut.handler(context.ctx);
+  assert.equal(context.statuses.at(-1).value, "perms: srt-sandboxed");
+  assert.equal(context.notifications.at(-1).level, "info");
+
+  await tool.execute("tool-2", { command: "git status --short" }, undefined, undefined, context.ctx);
+  assert.equal(executions.at(-1).command, "SANDBOXED(git status --short)");
+
+  __resetRuntimeStateForTests();
 });
 
 test("imports user Claude Code settings independently of project trust", async (t) => {

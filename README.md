@@ -53,6 +53,7 @@ Copy `config.example.json` to `config.json` next to the extension, or to `.pi/cl
   "mode": "coding",
   "noUiAskDecision": "deny",
   "autoApproveAsk": false,
+  "sandboxToggleShortcut": "ctrl+shift+p",
   "importClaudeCodeSettings": true,
   "persistApprovalsToClaudeCodeSettings": true,
   "writeClaudeCodeSettingsPath": ".claude/settings.local.json",
@@ -84,13 +85,16 @@ Examples:
 - allow a cache directory to be written in sandbox: `"allowWrite": ["~/.cache/my-tool"]`
 - force Docker to prompt unsandboxed: `"excludedCommands": ["Bash(docker:*)"]`
 
-## Commands and status
+## Commands, shortcut, and status
 
 - `/permissions-check <cmd>` shows both the v1 classification and the v2 pipeline action (`run-sandboxed`, `ask-unsandboxed`, etc.).
+- `Ctrl+Shift+P` toggles the sandbox for the current session only (`srt-sandboxed` ↔ `classify-only`). It does not edit config files.
+- Configure the shortcut with `"sandboxToggleShortcut": "ctrl+alt+p"`, use an array for multiple bindings, or set it to `null`, `false`, `"none"`, or `"disabled"` to disable registration.
 - Status line:
   - `perms: srt-sandboxed`
   - `perms: classify-only (srt unavailable)`
   - `perms: classify-only (sandbox disabled)`
+  - `perms: classify-only (shortcut override)`
 - User `!` / `!!` shell commands run unsandboxed because the human typed them.
 
 ## Threat model / non-goals

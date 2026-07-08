@@ -2,6 +2,7 @@
   "mode": "coding",
   "noUiAskDecision": "deny",
   "autoApproveAsk": false,
+  "sandboxToggleShortcut": "ctrl+shift+p",
   "importClaudeCodeSettings": true,
   "persistApprovalsToClaudeCodeSettings": true,
   "writeClaudeCodeSettingsPath": ".claude/settings.local.json",
