@@ -123,8 +123,8 @@ export const DEFAULT_CONFIG = {
     "[`]",
     "\\$\\(",
     "\\b(chmod|chown)\\b.*\\b777\\b",
-    "\\bcurl\\b.*\\|\\s*(sh|bash|zsh)",
-    "\\bwget\\b.*\\|\\s*(sh|bash|zsh)"
+    "\\bcurl\\b.*\\|\\s*(?:\\S*/)?(sh|bash|zsh)\\b",
+    "\\bwget\\b.*\\|\\s*(?:\\S*/)?(sh|bash|zsh)\\b"
   ],
   denyRegexes: [],
   // Optional: rules imported from Claude Code settings files. Each entry uses
@@ -369,9 +369,7 @@ export function normalizeTokens(tokens, config = DEFAULT_CONFIG) {
     }
 
     if (first === "env") {
-      current.shift();
-      while (current[0]?.startsWith("-")) current.shift();
-      current = stripEnvAssignments(current);
+      current = normalizeEnvTokens(current);
       changed = true;
       continue;
     }
@@ -381,6 +379,59 @@ export function normalizeTokens(tokens, config = DEFAULT_CONFIG) {
   }
 
   return current;
+}
+
+function normalizeEnvTokens(tokens) {
+  const rest = tokens.slice(1);
+  let i = 0;
+
+  const splitAndAppend = (value, afterIndex) => {
+    const split = tokenizeShellWords(value ?? "");
+    return stripEnvAssignments([...split, ...rest.slice(afterIndex)]);
+  };
+
+  while (i < rest.length) {
+    const token = rest[i];
+
+    if (token === "--") {
+      i++;
+      break;
+    }
+
+    if (token === "-") {
+      i++;
+      continue;
+    }
+
+    if (!token.startsWith("-") || token === "") break;
+
+    if (token === "-S" || token === "--split-string") {
+      return splitAndAppend(rest[i + 1], i + 2);
+    }
+    if (token.startsWith("-S") && token.length > 2) {
+      return splitAndAppend(token.slice(2), i + 1);
+    }
+    if (token.startsWith("--split-string=")) {
+      return splitAndAppend(token.slice("--split-string=".length), i + 1);
+    }
+
+    if (token === "-u" || token === "--unset" || token === "-C" || token === "--chdir" || token === "-a" || token === "--argv0") {
+      i += 2;
+      continue;
+    }
+    if ((token.startsWith("-u") || token.startsWith("-C") || token.startsWith("-a")) && token.length > 2) {
+      i++;
+      continue;
+    }
+    if (token.startsWith("--unset=") || token.startsWith("--chdir=") || token.startsWith("--argv0=")) {
+      i++;
+      continue;
+    }
+
+    i++;
+  }
+
+  return stripEnvAssignments(rest.slice(i));
 }
 
 function tokenPrefixMatches(tokens, prefix) {
@@ -724,6 +775,110 @@ function hasNonNullOutputRedirection(command) {
   return false;
 }
 
+function extractCommandSubstitutions(command) {
+  const substitutions = [];
+  let quote = null;
+  let escaped = false;
+
+  const readSubstitution = (start) => {
+    let depth = 1;
+    let inner = "";
+    let innerQuote = null;
+    let innerEscaped = false;
+
+    for (let i = start; i < command.length; i++) {
+      const ch = command[i];
+      const next = command[i + 1];
+
+      if (innerEscaped) {
+        inner += ch;
+        innerEscaped = false;
+        continue;
+      }
+
+      if (ch === "\\") {
+        inner += ch;
+        innerEscaped = true;
+        continue;
+      }
+
+      if (innerQuote) {
+        inner += ch;
+        if (ch === innerQuote) innerQuote = null;
+        continue;
+      }
+
+      if (ch === "'" || ch === '"') {
+        innerQuote = ch;
+        inner += ch;
+        continue;
+      }
+
+      if (ch === "$" && next === "(") {
+        depth++;
+        inner += "$";
+        inner += "(";
+        i++;
+        continue;
+      }
+
+      if (ch === ")") {
+        depth--;
+        if (depth === 0) return { content: inner, end: i };
+      }
+
+      inner += ch;
+    }
+
+    return undefined;
+  };
+
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    const next = command[i + 1];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+
+    if (quote === "'") {
+      if (ch === quote) quote = null;
+      continue;
+    }
+
+    if (quote === '"') {
+      if (ch === quote) quote = null;
+    } else if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+
+    if (ch === "$" && next === "(") {
+      const substitution = readSubstitution(i + 2);
+      if (substitution) {
+        substitutions.push(substitution.content);
+        i = substitution.end;
+      }
+    }
+  }
+
+  return substitutions;
+}
+
+function firstDeniedCommandSubstitution(command, config) {
+  for (const substitution of extractCommandSubstitutions(command)) {
+    const decision = classifyBashCommand(substitution, config);
+    if (decision.behavior === "deny") return decision;
+  }
+  return undefined;
+}
+
 function classifySubcommand(subcommand, config) {
   const rawTokens = tokenizeShellWords(subcommand);
   const tokens = normalizeTokens(rawTokens, config);
@@ -872,6 +1027,16 @@ export function classifyBashCommand(command, userConfig = {}) {
   }
 
   const rawAskRegex = firstMatchingAskRegex(trimmed, config.askRegexes, config.sandboxActive === true);
+  const deniedSubstitution = firstDeniedCommandSubstitution(trimmed, config);
+  if (deniedSubstitution) {
+    return {
+      behavior: "deny",
+      reason: `command substitution contains denied command: ${deniedSubstitution.reason}`,
+      command: trimmed,
+      subcommands: deniedSubstitution.subcommands ?? []
+    };
+  }
+
   const subcommands = splitShellCommand(trimmed).map((subcommand) => classifySubcommand(subcommand, config));
 
   const denied = subcommands.find((part) => part.behavior === "deny");

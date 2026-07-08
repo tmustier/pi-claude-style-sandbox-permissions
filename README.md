@@ -80,7 +80,7 @@ Expected:
 
 For each `bash` tool call the extension overrides Pi's built-in Bash tool and applies this pipeline:
 
-1. Explicit deny rules (`claudeDenyRules`, `denyPrefixes`, `denyRegexes`) block.
+1. Explicit deny rules (`claudeDenyRules`, `denyPrefixes`, `denyRegexes`) block, including after safe wrapper normalization and inside command substitutions.
 2. Safety asks (catastrophic `rm`, `--no-preserve-root`, `curl | sh`, substitution/redirection when no sandbox is active) prompt and never offer approve-always.
 3. `dangerouslyDisableSandbox: true` requests an unsandboxed retry and prompts unless an allow rule already matches.
 4. Claude Code allow rules (`Bash(git push:*)`) run unsandboxed with no prompt.

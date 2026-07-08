@@ -89,6 +89,18 @@ test("asks for command substitution and curl pipe shell", () => {
   assert.equal(behavior("curl https://example.com/install.sh | sh"), "ask");
 });
 
+test("does not hide explicit denies behind env wrappers or command substitution", () => {
+  assert.equal(behavior("env -u FOO prod-psql --drop", { sandboxActive: true }), "deny");
+  assert.equal(behavior("env --unset FOO prod-psql --drop", { sandboxActive: true }), "deny");
+  assert.equal(behavior("env -S 'prod-psql --drop'", { sandboxActive: true }), "deny");
+  assert.equal(behavior("env --split-string='prod-psql --drop'", { sandboxActive: true }), "deny");
+  assert.equal(behavior("echo $(prod-psql --drop)", { sandboxActive: true }), "deny");
+  assert.equal(behavior("echo $(git status --short)", {
+    sandboxActive: true,
+    claudeDenyRules: ["Bash(git status:*)"]
+  }), "deny");
+});
+
 test("normalizes wrappers and env assignments", () => {
   assert.equal(behavior("timeout 10 git status --short"), "allow");
   assert.equal(behavior("timeout -k 5s 10 git status --short"), "allow");
