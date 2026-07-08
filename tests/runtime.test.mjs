@@ -256,6 +256,29 @@ test("safety asks do not offer approve-always persistence", async (t) => {
   assert.match(error?.message, /Blocked by user/);
 });
 
+test("project settings.local Bash(git push:*) allow runs unsandboxed without prompting", async (t) => {
+  const cwd = await makeTempProject(t);
+  await mkdir(join(cwd, ".claude"), { recursive: true });
+  await writeFile(join(cwd, ".claude", "settings.local.json"), JSON.stringify({
+    permissions: { allow: ["Bash(git push:*)"] }
+  }));
+
+  let prompted = false;
+  const run = await runBashTool(t, "git push origin main", {
+    cwd,
+    trusted: true,
+    hasUI: true,
+    select: () => {
+      prompted = true;
+      return "No";
+    }
+  });
+
+  assert.equal(run.error, undefined);
+  assert.equal(prompted, false);
+  assert.equal(run.executions.at(-1).command, "git push origin main");
+});
+
 test("approve-always persists to settings.local.json then suppresses future prompts", async (t) => {
   const cwd = await makeTempProject(t);
   const settingsPath = join(cwd, ".claude", "settings.local.json");
