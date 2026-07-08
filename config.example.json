@@ -1,0 +1,33 @@
+{
+  "mode": "coding",
+  "noUiAskDecision": "deny",
+  "autoApproveAsk": false,
+  "importClaudeCodeSettings": true,
+  "persistApprovalsToClaudeCodeSettings": true,
+  "writeClaudeCodeSettingsPath": ".claude/settings.local.json",
+  "claudeCodeSettingsPaths": [
+    "~/.claude/settings.json",
+    ".claude/settings.json",
+    ".claude/settings.local.json"
+  ],
+  "allowPrefixes": [
+    "git add",
+    "git rm",
+    "git status"
+  ],
+  "askPrefixes": [
+    "git commit",
+    "git push",
+    "docker"
+  ],
+  "denyPrefixes": [
+    "prod-psql"
+  ],
+  "askRegexes": [
+    "[`]",
+    "\\$\\("
+  ],
+  "denyRegexes": [
+    "\\brm\\s+.*--no-preserve-root"
+  ]
+}

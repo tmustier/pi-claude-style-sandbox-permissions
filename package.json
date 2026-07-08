@@ -1,0 +1,27 @@
+{
+  "name": "pi-claude-style-permissions",
+  "version": "0.1.0",
+  "description": "Claude Code-inspired semantic Bash permission gate for Pi.",
+  "type": "module",
+  "main": "./index.ts",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  },
+  "keywords": [
+    "pi-extension",
+    "permissions",
+    "bash",
+    "claude-code"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.70.2"
+  }
+}
