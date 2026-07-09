@@ -91,6 +91,10 @@ For each `bash` tool call the extension overrides Pi's built-in Bash tool and ap
 
 On macOS, enforcement uses Apple's Seatbelt via `/usr/bin/sandbox-exec` through `srt`. Other platforms fall back to classify-only unless `srt` supports them and initializes successfully.
 
+## Gondolin / micro-VM evaluation
+
+Gondolin is being tracked separately as an opt-in local micro-VM backend, not as part of the default `srt` path. See [`docs/gondolin-evaluation.md`](docs/gondolin-evaluation.md) for the issue #4 recommendation, setup requirements, fail-closed semantics, future backend slice, tests, and risks.
+
 ## Sandbox defaults
 
 Sandboxed commands can write to:
