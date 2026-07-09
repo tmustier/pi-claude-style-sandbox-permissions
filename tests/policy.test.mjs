@@ -1,19 +1,32 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { classifyBashCommand, parseClaudePermissionRule, splitShellCommand, suggestClaudeAllowRule, tokenizeShellWords } from "../src/policy.js";
+import {
+  classifyBashCommand,
+  parseClaudePermissionRule,
+  splitShellCommand,
+  suggestClaudeAllowRule,
+  tokenizeShellWords,
+} from "../src/policy.js";
 
 function behavior(command, config) {
   return classifyBashCommand(command, config).behavior;
 }
 
 test("splits shell operators outside quotes", () => {
-  assert.deepEqual(splitShellCommand("git status | grep '^U|^D' || true"), ["git status", "grep '^U|^D'", "true"]);
+  assert.deepEqual(splitShellCommand("git status | grep '^U|^D' || true"), [
+    "git status",
+    "grep '^U|^D'",
+    "true",
+  ]);
   assert.deepEqual(splitShellCommand("git status & rm -rf /"), ["git status", "rm -rf /"]);
   assert.deepEqual(splitShellCommand("git status\nrm -rf /"), ["git status", "rm -rf /"]);
 });
 
 test("does not split quoted shell operators", () => {
-  assert.deepEqual(splitShellCommand("printf 'a && b | c ; d || e & f' && true"), ["printf 'a && b | c ; d || e & f'", "true"]);
+  assert.deepEqual(splitShellCommand("printf 'a && b | c ; d || e & f' && true"), [
+    "printf 'a && b | c ; d || e & f'",
+    "true",
+  ]);
 });
 
 test("tokenizes quoted shell words", () => {
@@ -21,11 +34,15 @@ test("tokenizes quoted shell words", () => {
 });
 
 test("allows git rm rather than matching raw rm substring", () => {
-  assert.equal(behavior("git rm -f -- platform/src/app/modules/rate_gathering/connectors/runtime.py"), "allow");
+  assert.equal(
+    behavior("git rm -f -- platform/src/app/modules/rate_gathering/connectors/runtime.py"),
+    "allow",
+  );
 });
 
 test("allows the merge-conflict staging/status chain from the incident", () => {
-  const command = "git add -- platform/src/app/modules/rate_gathering/connectors/runtime.py && git status --short | grep '^U' || true";
+  const command =
+    "git add -- platform/src/app/modules/rate_gathering/connectors/runtime.py && git status --short | grep '^U' || true";
   assert.equal(behavior(command), "allow");
 });
 
@@ -92,7 +109,10 @@ test("hard-denies catastrophic commands later in shell -c payloads", () => {
   assert.equal(behavior("sudo bash -c 'echo ok; rm -rf /'"), "deny");
   assert.equal(behavior("sudo bash --norc -c 'echo ok; rm -rf /'"), "deny");
   assert.equal(behavior("sudo sh -c 'printf ok | cat; chmod -R 777 /System'"), "deny");
-  assert.equal(behavior("doas bash -c 'echo ok || diskutil eraseDisk JHFS+ doomed /dev/disk0'"), "deny");
+  assert.equal(
+    behavior("doas bash -c 'echo ok || diskutil eraseDisk JHFS+ doomed /dev/disk0'"),
+    "deny",
+  );
   assert.equal(behavior("doas bash --rcfile /tmp/x -c 'echo ok; rm -rf /'"), "deny");
   assert.equal(behavior("su root -c 'echo ok; rm -rf /usr/local/bin'"), "deny");
 });
@@ -128,10 +148,13 @@ test("does not hide explicit denies behind env wrappers or command substitution"
   assert.equal(behavior("env -S 'prod-psql --drop'", { sandboxActive: true }), "deny");
   assert.equal(behavior("env --split-string='prod-psql --drop'", { sandboxActive: true }), "deny");
   assert.equal(behavior("echo $(prod-psql --drop)", { sandboxActive: true }), "deny");
-  assert.equal(behavior("echo $(git status --short)", {
-    sandboxActive: true,
-    claudeDenyRules: ["Bash(git status:*)"]
-  }), "deny");
+  assert.equal(
+    behavior("echo $(git status --short)", {
+      sandboxActive: true,
+      claudeDenyRules: ["Bash(git status:*)"],
+    }),
+    "deny",
+  );
 });
 
 test("normalizes wrappers and env assignments", () => {
@@ -149,16 +172,28 @@ test("parses Claude Code Bash permission rules", () => {
   assert.deepEqual(parseClaudePermissionRule("Bash(git rm:*)"), {
     raw: "Bash(git rm:*)",
     type: "prefix",
-    prefix: "git rm"
+    prefix: "git rm",
   });
   assert.equal(parseClaudePermissionRule("Read(**)")?.type, undefined);
 });
 
 test("honors imported Claude Code allow/ask/deny rules", () => {
-  assert.equal(behavior("git rm -f -- foo", { mode: "default", claudeAllowRules: ["Bash(git rm:*)"] }), "allow");
-  assert.equal(behavior("git push origin main", { claudeAllowRules: ["Bash(git push:*)"] }), "allow");
-  assert.equal(behavior("git reset --hard HEAD~1", { claudeAllowRules: ["Bash(git reset:*)"] }), "allow");
-  assert.equal(behavior("git branch -D old", { claudeAllowRules: ["Bash(git branch:*)"] }), "allow");
+  assert.equal(
+    behavior("git rm -f -- foo", { mode: "default", claudeAllowRules: ["Bash(git rm:*)"] }),
+    "allow",
+  );
+  assert.equal(
+    behavior("git push origin main", { claudeAllowRules: ["Bash(git push:*)"] }),
+    "allow",
+  );
+  assert.equal(
+    behavior("git reset --hard HEAD~1", { claudeAllowRules: ["Bash(git reset:*)"] }),
+    "allow",
+  );
+  assert.equal(
+    behavior("git branch -D old", { claudeAllowRules: ["Bash(git branch:*)"] }),
+    "allow",
+  );
   assert.equal(behavior("git push origin main", { claudeAllowRules: ["Read(**)"] }), "ask");
   assert.equal(behavior("git status --short", { claudeAskRules: ["Bash(git status:*)"] }), "ask");
   assert.equal(behavior("git status --short", { claudeDenyRules: ["Bash(git status:*)"] }), "deny");
@@ -168,20 +203,29 @@ test("honors imported Claude Code allow/ask/deny rules", () => {
 });
 
 test("uses fail-safe Claude Code rule precedence", () => {
-  assert.equal(behavior("git push origin main", {
-    claudeAllowRules: ["Bash(git push:*)"],
-    claudeAskRules: ["Bash(git push:*)"]
-  }), "ask");
-  assert.equal(behavior("git push origin main", {
-    claudeAllowRules: ["Bash(git push:*)"],
-    claudeDenyRules: ["Bash(git push:*)"]
-  }), "deny");
+  assert.equal(
+    behavior("git push origin main", {
+      claudeAllowRules: ["Bash(git push:*)"],
+      claudeAskRules: ["Bash(git push:*)"],
+    }),
+    "ask",
+  );
+  assert.equal(
+    behavior("git push origin main", {
+      claudeAllowRules: ["Bash(git push:*)"],
+      claudeDenyRules: ["Bash(git push:*)"],
+    }),
+    "deny",
+  );
   assert.equal(behavior("rm -rf /", { claudeAllowRules: ["Bash(rm:*)"] }), "deny");
   assert.equal(behavior("rm -rf /", { claudeDenyRules: ["Bash(rm:*)"] }), "deny");
 });
 
 test("suggests Claude Code allow rules for approve-always", () => {
-  assert.equal(suggestClaudeAllowRule(classifyBashCommand("git push origin main")), "Bash(git push:*)");
+  assert.equal(
+    suggestClaudeAllowRule(classifyBashCommand("git push origin main")),
+    "Bash(git push:*)",
+  );
   assert.equal(suggestClaudeAllowRule(classifyBashCommand("docker ps")), "Bash(docker:*)");
   assert.equal(suggestClaudeAllowRule(classifyBashCommand("npm run dev")), "Bash(npm run:*)");
   assert.equal(suggestClaudeAllowRule(classifyBashCommand("rm -rf /")), undefined);

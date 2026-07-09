@@ -70,8 +70,8 @@ The first code PR, if approved after this design slice, should be an **opt-in ex
   "sandbox": {
     "enabled": true,
     "backend": "srt", // "srt" | "gondolin"
-    "allowedDomains": []
-  }
+    "allowedDomains": [],
+  },
 }
 ```
 

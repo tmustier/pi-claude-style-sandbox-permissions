@@ -42,7 +42,9 @@ export function defaultAuditDirectory() {
 }
 
 function resolveAuditDirectory(options = {}) {
-  const configured = expandHome(options.directory ?? process.env.PI_CLAUDE_STYLE_PERMISSIONS_AUDIT_DIR);
+  const configured = expandHome(
+    options.directory ?? process.env.PI_CLAUDE_STYLE_PERMISSIONS_AUDIT_DIR,
+  );
   return configured ? resolve(configured) : defaultAuditDirectory();
 }
 
@@ -51,9 +53,10 @@ function auditDate(timestamp = new Date()) {
 }
 
 function auditFilePath(options = {}, timestamp = new Date()) {
-  const prefix = typeof options.fileNamePrefix === "string" && options.fileNamePrefix.trim()
-    ? options.fileNamePrefix.trim()
-    : "audit";
+  const prefix =
+    typeof options.fileNamePrefix === "string" && options.fileNamePrefix.trim()
+      ? options.fileNamePrefix.trim()
+      : "audit";
   return join(resolveAuditDirectory(options), `${prefix}-${auditDate(timestamp)}.jsonl`);
 }
 
@@ -79,7 +82,7 @@ export class AuditLogger {
       schemaVersion: 1,
       extension: EXTENSION_ID,
       timestamp: timestamp.toISOString(),
-      ...entry
+      ...entry,
     })}\n`;
 
     this.queue = this.queue
@@ -117,14 +120,29 @@ function truncate(value, maxChars = DEFAULT_MAX_COMMAND_PREVIEW_CHARS) {
 export function redactAuditString(value) {
   let text = String(value ?? "");
 
-  text = text.replace(/\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|AUTH|CREDENTIAL)[A-Za-z0-9_]*)=([^\s]+)/gi, "$1=<redacted>");
+  text = text.replace(
+    /\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|AUTH|CREDENTIAL)[A-Za-z0-9_]*)=([^\s]+)/gi,
+    "$1=<redacted>",
+  );
   text = text.replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, "$1 <redacted>");
-  text = text.replace(/([?&](?:access_token|api[_-]?key|key|password|secret|token)=)[^&\s]+/gi, "$1<redacted>");
-  text = text.replace(/(--?(?:access[-_]?token|api[-_]?key|password|passwd|secret|token)(?:=|\s+))([^\s]+)/gi, "$1<redacted>");
+  text = text.replace(
+    /([?&](?:access_token|api[_-]?key|key|password|secret|token)=)[^&\s]+/gi,
+    "$1<redacted>",
+  );
+  text = text.replace(
+    /(--?(?:access[-_]?token|api[-_]?key|password|passwd|secret|token)(?:=|\s+))([^\s]+)/gi,
+    "$1<redacted>",
+  );
   text = text.replace(/:\/\/([^\s/@:]+):([^\s/@]+)@/g, "://<redacted>@");
-  text = text.replace(/\bgithub_pat_[A-Za-z0-9_]{20,}_[A-Za-z0-9_]{20,}\b/g, "<redacted-github-token>");
+  text = text.replace(
+    /\bgithub_pat_[A-Za-z0-9_]{20,}_[A-Za-z0-9_]{20,}\b/g,
+    "<redacted-github-token>",
+  );
   text = text.replace(/\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g, "<redacted-github-token>");
-  text = text.replace(/\b(?:gh[pousr]|github_pat)-[A-Za-z0-9_=-]{8,}\b/g, "<redacted-github-token>");
+  text = text.replace(
+    /\b(?:gh[pousr]|github_pat)-[A-Za-z0-9_=-]{8,}\b/g,
+    "<redacted-github-token>",
+  );
   text = text.replace(/\b(?:sk|pk|rk|xox[baprs]?)-[A-Za-z0-9_=-]{8,}\b/g, "<redacted-token>");
   text = text.replace(/\bAKIA[0-9A-Z]{16}\b/g, "<redacted-aws-key>");
 
@@ -132,7 +150,9 @@ export function redactAuditString(value) {
 }
 
 function commandHash(command) {
-  return createHash("sha256").update(String(command ?? ""), "utf8").digest("hex");
+  return createHash("sha256")
+    .update(String(command ?? ""), "utf8")
+    .digest("hex");
 }
 
 function summarizeSubcommand(subcommand, config, maxChars) {
@@ -144,16 +164,17 @@ function summarizeSubcommand(subcommand, config, maxChars) {
     executable,
     argCount: Math.max(0, tokens.length - 1),
     normalizedPreview: preview.value,
-    normalizedPreviewTruncated: preview.truncated
+    normalizedPreviewTruncated: preview.truncated,
   };
 }
 
 export function summarizeCommandForAudit(command, config = {}) {
-  const maxChars = typeof config.auditLog?.maxCommandPreviewChars === "number"
-    ? config.auditLog.maxCommandPreviewChars
-    : typeof config.maxCommandPreviewChars === "number"
-      ? config.maxCommandPreviewChars
-      : DEFAULT_MAX_COMMAND_PREVIEW_CHARS;
+  const maxChars =
+    typeof config.auditLog?.maxCommandPreviewChars === "number"
+      ? config.auditLog.maxCommandPreviewChars
+      : typeof config.maxCommandPreviewChars === "number"
+        ? config.maxCommandPreviewChars
+        : DEFAULT_MAX_COMMAND_PREVIEW_CHARS;
   const redacted = redactAuditString(command);
   const preview = truncate(redacted, maxChars);
 
@@ -164,7 +185,7 @@ export function summarizeCommandForAudit(command, config = {}) {
     previewTruncated: preview.truncated,
     subcommands: splitShellCommand(String(command ?? ""))
       .slice(0, 10)
-      .map((subcommand) => summarizeSubcommand(subcommand, config, Math.min(maxChars, 160)))
+      .map((subcommand) => summarizeSubcommand(subcommand, config, Math.min(maxChars, 160))),
   };
 }
 
@@ -185,7 +206,9 @@ function findToolCallEntry(sessionManager, toolCallId) {
   const branch = safeCall(() => sessionManager?.getBranch?.());
   const entries = Array.isArray(branch) ? branch : safeCall(() => sessionManager?.getEntries?.());
   if (!Array.isArray(entries)) return undefined;
-  return [...entries].reverse().find((entry) => entry?.type === "message" && messageHasToolCall(entry.message, toolCallId));
+  return [...entries]
+    .reverse()
+    .find((entry) => entry?.type === "message" && messageHasToolCall(entry.message, toolCallId));
 }
 
 export function buildSessionReference(ctx, { toolCallId, turnRef } = {}) {
@@ -203,7 +226,7 @@ export function buildSessionReference(ctx, { toolCallId, turnRef } = {}) {
     assistantEntryId: toolEntry?.id,
     toolCallId,
     turnIndex: turnRef?.turnIndex,
-    turnTimestamp: turnRef?.timestamp
+    turnTimestamp: turnRef?.timestamp,
   };
 }
 
@@ -215,17 +238,26 @@ function summarizeDecision(decision, { sandboxStatus, dangerouslyDisableSandbox 
     suggestedRule: decision?.suggestedRule,
     sandboxAvailable: sandboxStatus?.available === true,
     sandboxUnavailableReason: sandboxStatus?.reason,
-    dangerouslyDisableSandbox: dangerouslyDisableSandbox === true
+    dangerouslyDisableSandbox: dangerouslyDisableSandbox === true,
   };
 }
 
-export function createAuditContext({ config = {}, ctx, toolCallId, command, decision, sandboxStatus, dangerouslyDisableSandbox, turnRef } = {}) {
+export function createAuditContext({
+  config = {},
+  ctx,
+  toolCallId,
+  command,
+  decision,
+  sandboxStatus,
+  dangerouslyDisableSandbox,
+  turnRef,
+} = {}) {
   if (config.auditLog?.enabled === false) {
     return {
       enabled: false,
       logAllowed() {},
       logApprovalRequested() {},
-      logApprovalOutcome() {}
+      logApprovalOutcome() {},
     };
   }
 
@@ -237,14 +269,14 @@ export function createAuditContext({ config = {}, ctx, toolCallId, command, deci
   const base = {
     session,
     command: commandSummary,
-    decision: decisionSummary
+    decision: decisionSummary,
   };
 
   const write = (event, extra = {}) => {
     void logger.log({
       event,
       ...base,
-      ...extra
+      ...extra,
     });
   };
 
@@ -253,7 +285,7 @@ export function createAuditContext({ config = {}, ctx, toolCallId, command, deci
     logAllowed({ approvalId, executionTarget } = {}) {
       write("tool_call_allowed", {
         execution: { target: executionTarget },
-        approval: approvalId ? { id: approvalId } : undefined
+        approval: approvalId ? { id: approvalId } : undefined,
       });
     },
     logApprovalRequested(details = {}) {
@@ -261,6 +293,6 @@ export function createAuditContext({ config = {}, ctx, toolCallId, command, deci
     },
     logApprovalOutcome(details = {}) {
       write("approval_outcome", { approval: details });
-    }
+    },
   };
 }

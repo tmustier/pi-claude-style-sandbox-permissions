@@ -64,7 +64,13 @@ export function readJsonIfPresent(path) {
 }
 
 export function uniqueStrings(values) {
-  return [...new Set(values.filter((value) => typeof value === "string" && value.trim()).map((value) => value.trim()))];
+  return [
+    ...new Set(
+      values
+        .filter((value) => typeof value === "string" && value.trim())
+        .map((value) => value.trim()),
+    ),
+  ];
 }
 
 function defaultClaudeSettingsPaths(ctx) {
@@ -106,12 +112,15 @@ function extractClaudePermissionRules(settings) {
   return {
     allow: Array.isArray(permissions.allow) ? permissions.allow : [],
     ask: Array.isArray(permissions.ask) ? permissions.ask : [],
-    deny: Array.isArray(permissions.deny) ? permissions.deny : []
+    deny: Array.isArray(permissions.deny) ? permissions.deny : [],
   };
 }
 
 export function getClaudeLocalSettingsPath(ctx, config) {
-  if (typeof config.writeClaudeCodeSettingsPath === "string" && config.writeClaudeCodeSettingsPath.trim()) {
+  if (
+    typeof config.writeClaudeCodeSettingsPath === "string" &&
+    config.writeClaudeCodeSettingsPath.trim()
+  ) {
     return resolveConfiguredClaudeSettingsPath(config.writeClaudeCodeSettingsPath.trim(), ctx);
   }
   return join(ctx.cwd, ".claude", "settings.local.json");
@@ -119,7 +128,9 @@ export function getClaudeLocalSettingsPath(ctx, config) {
 
 export function loadClaudeCodePermissionConfig(ctx, config) {
   const configuredPaths = Array.isArray(config.claudeCodeSettingsPaths)
-    ? config.claudeCodeSettingsPaths.map((path) => resolveConfiguredClaudeSettingsPath(String(path), ctx))
+    ? config.claudeCodeSettingsPaths.map((path) =>
+        resolveConfiguredClaudeSettingsPath(String(path), ctx),
+      )
     : defaultClaudeSettingsPaths(ctx);
 
   const allow = [];
@@ -131,7 +142,10 @@ export function loadClaudeCodePermissionConfig(ctx, config) {
     const settings = readJsonIfPresent(path);
     if (!settings) continue;
     if (settings.__configError) {
-      ctx.ui.notify?.(`claude-style-permissions: failed to parse Claude Code settings ${settings.__path}: ${settings.__configError}`, "warning");
+      ctx.ui.notify?.(
+        `claude-style-permissions: failed to parse Claude Code settings ${settings.__path}: ${settings.__configError}`,
+        "warning",
+      );
       continue;
     }
 
@@ -144,7 +158,7 @@ export function loadClaudeCodePermissionConfig(ctx, config) {
   return {
     claudeAllowRules: uniqueStrings(allow),
     claudeAskRules: uniqueStrings(ask),
-    claudeDenyRules: uniqueStrings(deny)
+    claudeDenyRules: uniqueStrings(deny),
   };
 }
 
@@ -152,13 +166,19 @@ export function persistClaudeAllowRule(ctx, config, rule) {
   const path = getClaudeLocalSettingsPath(ctx, config);
   const existing = readJsonIfPresent(path);
   if (existing?.__configError) {
-    ctx.ui.notify?.(`claude-style-permissions: cannot persist approval; failed to parse ${existing.__path}: ${existing.__configError}`, "error");
+    ctx.ui.notify?.(
+      `claude-style-permissions: cannot persist approval; failed to parse ${existing.__path}: ${existing.__configError}`,
+      "error",
+    );
     return false;
   }
 
   const next = existing && typeof existing === "object" ? existing : {};
-  const permissions = next.permissions && typeof next.permissions === "object" ? next.permissions : {};
-  const allow = Array.isArray(permissions.allow) ? permissions.allow.filter((value) => typeof value === "string") : [];
+  const permissions =
+    next.permissions && typeof next.permissions === "object" ? next.permissions : {};
+  const allow = Array.isArray(permissions.allow)
+    ? permissions.allow.filter((value) => typeof value === "string")
+    : [];
 
   if (!allow.includes(rule)) allow.push(rule);
   next.permissions = { ...permissions, allow };

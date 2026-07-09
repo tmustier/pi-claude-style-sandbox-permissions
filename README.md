@@ -158,7 +158,7 @@ Copy `config.example.json` to `config.json` next to the extension, or to `.pi/cl
     "enabled": true,
     "directory": "~/.pi/agent/claude-style-permissions/audit",
     "fileNamePrefix": "audit",
-    "maxCommandPreviewChars": 240
+    "maxCommandPreviewChars": 240,
   },
   "importClaudeCodeSettings": true,
   "persistApprovalsToClaudeCodeSettings": true,
@@ -166,7 +166,7 @@ Copy `config.example.json` to `config.json` next to the extension, or to `.pi/cl
   "claudeCodeSettingsPaths": [
     "~/.claude/settings.json",
     ".claude/settings.json",
-    ".claude/settings.local.json"
+    ".claude/settings.local.json",
   ],
   "claudeAllowRules": ["Bash(git push:*)"],
   "claudeAskRules": [],
@@ -178,8 +178,8 @@ Copy `config.example.json` to `config.json` next to the extension, or to `.pi/cl
     "denyWrite": [],
     "denyRead": [],
     "excludedCommands": [],
-    "annotateViolations": true
-  }
+    "annotateViolations": true,
+  },
 }
 ```
 
@@ -217,10 +217,16 @@ This extension protects against accidental or model-initiated Bash effects outsi
 
 Keep backups/git history for workspace damage. Treat approve-always rules as trust decisions.
 
-## Test
+## Quality checks
+
+The lint/format setup follows the `gugu91/extensions` baseline: ESLint flat config with Node globals, TypeScript-aware rules for `.ts`, no explicit `any`, no unused variables, and a guardrail against generic `isRecord` helpers; Prettier enforces formatting.
 
 ```bash
+npm run lint
+npm run static
 npm test
-node --check index.ts src/*.js
+npm run format:check
 npm pack --dry-run
 ```
+
+`npm run check` runs lint, static syntax checks, tests, and format verification together.

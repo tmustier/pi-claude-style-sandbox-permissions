@@ -26,7 +26,8 @@ test("audit logger appends JSONL under the configured local directory", async (t
 });
 
 test("audit command summaries redact common credential shapes", () => {
-  const command = "curl -H 'Authorization: Bearer bearer-value-for-redaction' 'https://example.com?token=query-value-for-redaction' --password placeholder-value";
+  const command =
+    "curl -H 'Authorization: Bearer bearer-value-for-redaction' 'https://example.com?token=query-value-for-redaction' --password placeholder-value";
   const summary = summarizeCommandForAudit(command, { auditLog: { maxCommandPreviewChars: 500 } });
   const serialized = JSON.stringify(summary);
 
