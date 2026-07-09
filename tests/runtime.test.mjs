@@ -511,6 +511,7 @@ test("hard-denied commands do not initialize the omnigent-managed backend", asyn
   const cwd = await makeTempProject(t);
   await mkdir(join(cwd, ".pi"), { recursive: true });
   await writeFile(join(cwd, ".pi", "claude-style-permissions.json"), JSON.stringify({
+    claudeAllowRules: ["Bash(*)"],
     sandbox: {
       backend: "omnigent-managed",
       omnigent: {
@@ -523,9 +524,17 @@ test("hard-denied commands do not initialize the omnigent-managed backend", asyn
     throw new Error("hard deny should not touch the backend");
   });
 
-  const run = await runBashTool(t, "sudo bash -c 'rm -rf /'", { cwd, trusted: true, hasUI: false });
-  assert.match(run.error?.message, /Denied by claude-style-permissions/);
-  assert.equal(run.executions.length, 0);
+  for (const command of [
+    "sudo bash -c 'rm -rf /'",
+    "shutdown -h now",
+    "sudo shutdown -h now",
+    "launchctl bootout system/com.apple.foo",
+    "sudo launchctl unload -w /System/Library/LaunchDaemons/com.apple.foo.plist"
+  ]) {
+    const run = await runBashTool(t, command, { cwd, trusted: true, hasUI: false }, { dangerouslyDisableSandbox: true });
+    assert.match(run.error?.message, /Denied by claude-style-permissions/, command);
+    assert.equal(run.executions.length, 0, command);
+  }
   assert.equal(calls.length, 0);
 });
 
