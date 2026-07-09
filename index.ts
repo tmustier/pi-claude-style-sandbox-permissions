@@ -20,10 +20,12 @@ import {
   ensureSandbox,
   formatViolationAnnotation,
   getSandboxStatus,
+  sandboxBackend,
   sandboxEnabled,
   shutdown,
   wrapCommand
 } from "./src/sandbox.js";
+import { createOmnigentManagedOperations } from "./src/omnigent.js";
 
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
 const EXTENSION_CONFIG_PATH = join(EXTENSION_DIR, "config.json");
@@ -114,7 +116,16 @@ function setPermissionStatus(ctx, config, reason) {
       : "perms: classify-only (sandbox disabled)");
     return;
   }
-  const status = getSandboxStatus();
+  const backend = sandboxBackend(config);
+  const status = getSandboxStatus(config);
+  if (backend === "omnigent-managed") {
+    ctx.ui.setStatus?.("claude-perms", status.reason ? "perms: omnigent-managed unavailable" : "perms: omnigent-managed (not checked)");
+    return;
+  }
+  if (backend !== "srt") {
+    ctx.ui.setStatus?.("claude-perms", "perms: backend unavailable");
+    return;
+  }
   ctx.ui.setStatus?.("claude-perms", status.reason ? "perms: classify-only (srt unavailable)" : "perms: srt-sandboxed");
 }
 
@@ -131,8 +142,11 @@ async function toggleSandboxForSession(ctx) {
   }
 
   const status = await ensureSandbox(ctx, nextConfig);
+  const backend = sandboxBackend(nextConfig);
   if (status.available) {
-    ctx.ui.notify?.("Claude-style permission sandbox enabled for this session.", "info");
+    ctx.ui.notify?.(`Claude-style permission sandbox enabled for this session (${backend}).`, "info");
+  } else if (status.failClosed) {
+    ctx.ui.notify?.(`Claude-style permission sandbox backend '${backend}' is unavailable; Bash will fail closed instead of running on the host: ${status.reason ?? "unknown error"}`, "warning");
   } else {
     ctx.ui.notify?.(`Claude-style permission sandbox requested, but srt is unavailable; staying classify-only: ${status.reason ?? "unknown error"}`, "warning");
   }
@@ -295,7 +309,19 @@ function createSandboxOperations(localOperations) {
   };
 }
 
-function sandboxPromptSection() {
+function sandboxPromptSection(config) {
+  if (sandboxBackend(config) === "omnigent-managed") {
+    return [
+      "",
+      "## Bash Omnigent managed sandbox",
+      "Bash commands run in the configured Omnigent managed environment by default. This backend is opt-in and fails closed if the server, session, environment, auth, or runner is unavailable.",
+      "Do not set `dangerouslyDisableSandbox: true` preemptively; it is an escalation request, not an approval.",
+      "If the Omnigent backend reports setup or availability errors, do not fall back to local host Bash; ask the operator to fix the backend or deliberately change the sandbox configuration.",
+      "Do not retry hard-denied catastrophic/root/system-destructive commands unsandboxed.",
+      "Return to normal sandboxed Bash calls after any one approved unsandboxed retry."
+    ].join("\n");
+  }
+
   return [
     "",
     "## Bash OS sandbox",
@@ -335,8 +361,15 @@ export default async function (pi) {
         return;
       }
       const config = loadConfig(ctx);
-      const sandboxStatus = sandboxEnabled(config) ? await ensureSandbox(ctx, config) : { available: false };
-      const pipelineDecision = decide(command, { config, sandboxAvailable: sandboxStatus.available });
+      const preflightDecision = decide(command, { config, sandboxAvailable: false });
+      const sandboxStatus = preflightDecision.action === "deny"
+        ? { available: false }
+        : sandboxEnabled(config)
+          ? await ensureSandbox(ctx, config)
+          : { available: false };
+      const pipelineDecision = sandboxStatus.failClosed && !sandboxStatus.available
+        ? { action: "deny", reason: sandboxStatus.reason }
+        : decide(command, { config, sandboxAvailable: sandboxStatus.available });
       const classifierDecision = classifyBashCommand(command, { ...config, sandboxActive: sandboxStatus.available });
       const text = `${formatDecision(classifierDecision)}\nPipeline action: ${pipelineDecision.action}${pipelineDecision.reason ? ` — ${pipelineDecision.reason}` : ""}`;
       ctx.ui.notify(text, pipelineDecision.action === "deny" ? "error" : pipelineDecision.action.includes("ask") ? "warning" : "info");
@@ -354,7 +387,20 @@ export default async function (pi) {
 
       const timeout = typeof params.timeout === "number" ? params.timeout : undefined;
       const config = loadConfig(ctx);
+      const preflightDecision = decide(command, {
+        config,
+        dangerouslyDisableSandbox: params.dangerouslyDisableSandbox === true,
+        sandboxAvailable: false
+      });
+      if (preflightDecision.action === "deny") {
+        throw new Error(`Denied by claude-style-permissions: ${preflightDecision.reason}`);
+      }
+
       const sandboxStatus = sandboxEnabled(config) ? await ensureSandbox(ctx, config) : { available: false };
+      if (sandboxStatus.failClosed && !sandboxStatus.available) {
+        throw new Error(`Sandbox backend unavailable; command was not run: ${sandboxStatus.reason ?? "unknown error"}`);
+      }
+
       const pipelineDecision = decide(command, {
         config,
         dangerouslyDisableSandbox: params.dangerouslyDisableSandbox === true,
@@ -366,6 +412,11 @@ export default async function (pi) {
       }
 
       const runSandboxed = async () => {
+        if (sandboxBackend(config) === "omnigent-managed") {
+          const sandboxTool = createBashTool(localCwd, { operations: createOmnigentManagedOperations(config, ctx) });
+          return sandboxTool.execute(id, { command, timeout }, signal, onUpdate, ctx);
+        }
+
         const wrapped = await wrapCommand(command, signal);
         const sandboxTool = createBashTool(localCwd, { operations: createSandboxOperations(localOperations) });
         try {
@@ -413,9 +464,9 @@ export default async function (pi) {
 
   pi.on?.("before_agent_start", async (event, ctx) => {
     const config = loadConfig(ctx);
-    const status = getSandboxStatus();
+    const status = getSandboxStatus(config);
     if (!sandboxEnabled(config) || status.reason) return undefined;
-    return { systemPrompt: `${event.systemPrompt}${sandboxPromptSection()}` };
+    return { systemPrompt: `${event.systemPrompt}${sandboxPromptSection(config)}` };
   });
 
   pi.on?.("user_bash", () => {

@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { classifyBashCommand, parseClaudePermissionRule, splitShellCommand, suggestClaudeAllowRule, tokenizeShellWords } from "../src/policy.js";
+import { classifyBashCommand, classifyBashSafety, parseClaudePermissionRule, splitShellCommand, suggestClaudeAllowRule, tokenizeShellWords } from "../src/policy.js";
 
 function behavior(command, config) {
   return classifyBashCommand(command, config).behavior;
+}
+
+function safetyBehavior(command, config) {
+  return classifyBashSafety(command, config).behavior;
 }
 
 test("splits shell operators outside quotes", () => {
@@ -82,6 +86,28 @@ test("hard-denies obvious root/system destructive forms through wrappers", () =>
   assert.equal(behavior("su root -c 'rm -rf /'"), "deny");
   assert.equal(behavior("chmod -R 777 /System"), "deny");
   assert.equal(behavior("dd if=/dev/zero of=/dev/disk0 bs=1m"), "deny");
+  assert.equal(behavior("shutdown -h now"), "deny");
+  assert.equal(behavior("sudo shutdown -h now"), "deny");
+  assert.equal(behavior("/sbin/shutdown -h now"), "deny");
+  assert.equal(behavior("launchctl bootout system/com.apple.foo"), "deny");
+  assert.equal(behavior("sudo launchctl unload -w /System/Library/LaunchDaemons/com.apple.foo.plist"), "deny");
+  assert.equal(behavior("sudo launchctl unload -w /Library/LaunchDaemons/com.example.foo.plist"), "deny");
+});
+
+// These forms must be hard denies in both the policy classifier and the safety
+// classifier so they cannot be downgraded by sandbox availability, DDS, or a
+// broad Claude Code allow rule.
+test("hard-denies host power and system launchctl before safety/DDS", () => {
+  const config = { sandboxActive: true, claudeAllowRules: ["Bash(*)"] };
+  for (const command of [
+    "shutdown -h now",
+    "sudo shutdown -h now",
+    "launchctl bootout system/com.apple.foo",
+    "sudo launchctl unload -w /System/Library/LaunchDaemons/com.apple.foo.plist"
+  ]) {
+    assert.equal(behavior(command, config), "deny", command);
+    assert.equal(safetyBehavior(command, config), "deny", command);
+  }
 });
 
 test("hard-denies catastrophic commands later in shell -c payloads", () => {

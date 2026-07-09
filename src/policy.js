@@ -136,12 +136,14 @@ export const DEFAULT_CONFIG = {
   claudeDenyRules: [],
   sandbox: {
     enabled: true,
+    backend: "srt",
     allowedDomains: [],
     allowWrite: [],
     denyWrite: [],
     denyRead: [],
     excludedCommands: [],
-    annotateViolations: true
+    annotateViolations: true,
+    omnigent: {}
   }
 };
 
@@ -174,6 +176,11 @@ export function mergeConfig(base = DEFAULT_CONFIG, override = {}) {
         const baseValues = Array.isArray(baseSandbox[key]) ? baseSandbox[key] : [];
         merged.sandbox[key] = [...baseValues, ...overrideSandbox[key]];
       }
+    }
+    if (baseSandbox.omnigent || overrideSandbox.omnigent) {
+      const baseOmnigent = baseSandbox.omnigent && typeof baseSandbox.omnigent === "object" ? baseSandbox.omnigent : {};
+      const overrideOmnigent = overrideSandbox.omnigent && typeof overrideSandbox.omnigent === "object" ? overrideSandbox.omnigent : {};
+      merged.sandbox.omnigent = { ...baseOmnigent, ...overrideOmnigent };
     }
   }
 
@@ -597,6 +604,24 @@ const SYSTEM_ROOT_TARGETS = new Set([
 ]);
 
 const SHELL_COMMANDS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
+const POWER_STATE_COMMANDS = new Set(["shutdown", "reboot", "halt", "poweroff"]);
+const LAUNCHCTL_SYSTEM_MUTATING_SUBCOMMANDS = new Set([
+  "bootstrap",
+  "bootout",
+  "enable",
+  "disable",
+  "kickstart",
+  "kill",
+  "load",
+  "remove",
+  "start",
+  "stop",
+  "unload"
+]);
+const LAUNCH_DAEMON_ROOTS = [
+  "/System/Library/LaunchDaemons",
+  "/Library/LaunchDaemons"
+];
 
 function normalizeDestructiveTarget(target) {
   if (typeof target !== "string") return "";
@@ -626,7 +651,7 @@ function targetLooksLikeSystemRoot(target) {
 }
 
 function classifyRm(tokens) {
-  if (tokens[0] !== "rm") return undefined;
+  if (commandBasename(tokens[0]) !== "rm") return undefined;
   const args = tokens.slice(1);
   const optionTokens = [];
   const targets = [];
@@ -811,18 +836,43 @@ function privilegedCommandTokens(tokens) {
 }
 
 function classifyChmodChown(tokens) {
-  if (!["chmod", "chown"].includes(tokens[0])) return undefined;
+  const command = commandBasename(tokens[0]);
+  if (!["chmod", "chown"].includes(command)) return undefined;
   const recursive = tokens.some((token) => token === "-R" || token === "--recursive" || /^-[^-]*R/.test(token));
   if (!recursive) return undefined;
   const targets = tokens.slice(1).filter((token) => !token.startsWith("-") && !/^[0-7]{3,4}$/.test(token));
   if (targets.some((target) => targetLooksCatastrophic(target) || targetLooksLikeSystemRoot(target))) {
-    return { behavior: "deny", reason: `${tokens[0]} recursively targets a catastrophic/system path`, allowPersistentApproval: false };
+    return { behavior: "deny", reason: `${command} recursively targets a catastrophic/system path`, allowPersistentApproval: false };
+  }
+  return undefined;
+}
+
+function launchctlTargetLooksSystemScoped(target) {
+  const t = normalizeDestructiveTarget(target);
+  if (t === "system" || t.startsWith("system/")) return true;
+  return LAUNCH_DAEMON_ROOTS.some((root) => t === root || t.startsWith(`${root}/`));
+}
+
+function classifyLaunchctl(tokens) {
+  if (commandBasename(tokens[0]) !== "launchctl") return undefined;
+  const subcommand = tokens[1];
+  if (!LAUNCHCTL_SYSTEM_MUTATING_SUBCOMMANDS.has(subcommand)) return undefined;
+  if (tokens.slice(2).some(launchctlTargetLooksSystemScoped)) {
+    return { behavior: "deny", reason: `launchctl ${subcommand} targets a system service/domain`, allowPersistentApproval: false };
   }
   return undefined;
 }
 
 function classifyDestructiveSystemCommand(tokens, depth = 0) {
   if (depth > 4 || tokens.length === 0) return undefined;
+  const command = commandBasename(tokens[0]);
+
+  if (POWER_STATE_COMMANDS.has(command)) {
+    return { behavior: "deny", reason: `${command} can power off or reboot the host`, allowPersistentApproval: false };
+  }
+
+  const launchctlDecision = classifyLaunchctl(tokens);
+  if (launchctlDecision?.behavior === "deny") return launchctlDecision;
 
   const rmDecision = classifyRm(tokens);
   if (rmDecision?.behavior === "deny") return rmDecision;
@@ -830,16 +880,16 @@ function classifyDestructiveSystemCommand(tokens, depth = 0) {
   const chmodDecision = classifyChmodChown(tokens);
   if (chmodDecision?.behavior === "deny") return chmodDecision;
 
-  if (tokens[0] === "dd" && tokens.some((token) => /^of=\/dev\/(?:r?disk|sd|nvme)/.test(token))) {
+  if (command === "dd" && tokens.some((token) => /^of=\/dev\/(?:r?disk|sd|nvme)/.test(token))) {
     return { behavior: "deny", reason: "dd writes directly to a disk device", allowPersistentApproval: false };
   }
 
-  if (tokens[0] === "diskutil" && ["eraseDisk", "eraseVolume", "partitionDisk", "deleteVolume", "deleteContainer"].includes(tokens[1])) {
+  if (command === "diskutil" && ["eraseDisk", "eraseVolume", "partitionDisk", "deleteVolume", "deleteContainer"].includes(tokens[1])) {
     return { behavior: "deny", reason: `diskutil ${tokens[1]} is system-destructive`, allowPersistentApproval: false };
   }
 
-  if (/^(?:mkfs|newfs)(?:\.|$)/.test(tokens[0]) || ["fdisk", "sfdisk", "parted"].includes(tokens[0])) {
-    return { behavior: "deny", reason: `${tokens[0]} can rewrite disks/partitions`, allowPersistentApproval: false };
+  if (/^(?:mkfs|newfs)(?:\.|$)/.test(command) || ["fdisk", "sfdisk", "parted"].includes(command)) {
+    return { behavior: "deny", reason: `${command} can rewrite disks/partitions`, allowPersistentApproval: false };
   }
 
   const shellCommand = shellCommandFromTokens(tokens);

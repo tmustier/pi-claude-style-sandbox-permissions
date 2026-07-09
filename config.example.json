@@ -33,11 +33,23 @@
   ],
   "sandbox": {
     "enabled": true,
+    "backend": "srt",
     "allowedDomains": [],
     "allowWrite": [],
     "denyWrite": [],
     "denyRead": [],
     "excludedCommands": [],
-    "annotateViolations": true
+    "annotateViolations": true,
+    "omnigent": {
+      "serverUrl": "https://your-omnigent-server.example",
+      "sessionId": "conv_...",
+      "environmentId": "default",
+      "bearerTokenEnv": "OMNIGENT_BEARER_TOKEN",
+      "cookieEnv": "OMNIGENT_SESSION_COOKIE",
+      "authHeaderName": "",
+      "authHeaderValueEnv": "",
+      "ensureTimeoutMs": 15000,
+      "commandTimeoutMs": 60000
+    }
   }
 }

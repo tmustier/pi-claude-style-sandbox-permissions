@@ -1,8 +1,11 @@
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import { SandboxManager as ImportedSandboxManager } from "@anthropic-ai/sandbox-runtime";
+import { ensureOmnigentManagedSandbox } from "./omnigent.js";
 
 const DEFAULT_DENY_READ = ["~/.ssh", "~/.aws", "~/.gnupg"];
+const DEFAULT_SANDBOX_BACKEND = "srt";
+const OMNIGENT_BACKEND_ALIASES = new Set(["omnigent", "omnigent-managed"]);
 
 let SandboxManager = ImportedSandboxManager;
 let state = freshState();
@@ -81,6 +84,18 @@ export function sandboxEnabled(config = {}) {
   return config.sandbox?.enabled !== false;
 }
 
+export function sandboxBackend(config = {}) {
+  const backend = typeof config.sandbox?.backend === "string" && config.sandbox.backend.trim()
+    ? config.sandbox.backend.trim().toLowerCase()
+    : DEFAULT_SANDBOX_BACKEND;
+  return OMNIGENT_BACKEND_ALIASES.has(backend) ? "omnigent-managed" : backend;
+}
+
+export function sandboxBackendFailsClosed(config = {}) {
+  const backend = sandboxBackend(config);
+  return sandboxEnabled(config) && backend !== DEFAULT_SANDBOX_BACKEND;
+}
+
 function setStatus(ctx, text) {
   ctx?.ui?.setStatus?.("claude-perms", text);
 }
@@ -99,26 +114,50 @@ function attachViolationStore() {
   });
 }
 
-export function getSandboxStatus() {
-  if (state.available) return { available: true, initialized: state.initialized, reason: undefined };
-  if (state.failure) return { available: false, initialized: state.initialized, reason: state.failure.message ?? String(state.failure) };
-  return { available: false, initialized: state.initialized, reason: undefined };
+export function getSandboxStatus(config = {}) {
+  const backend = sandboxBackend(config);
+  if (backend === "omnigent-managed") {
+    return { available: false, initialized: false, reason: undefined, backend };
+  }
+  if (backend !== DEFAULT_SANDBOX_BACKEND) {
+    return { available: false, initialized: false, reason: `unsupported sandbox backend '${backend}'`, backend, failClosed: true };
+  }
+  if (state.available) return { available: true, initialized: state.initialized, reason: undefined, backend };
+  if (state.failure) return { available: false, initialized: state.initialized, reason: state.failure.message ?? String(state.failure), backend };
+  return { available: false, initialized: state.initialized, reason: undefined, backend };
 }
 
 export async function ensureSandbox(ctx, config = {}) {
   if (!sandboxEnabled(config)) {
     setStatus(ctx, "perms: classify-only (sandbox disabled)");
-    return { available: false, reason: "sandbox disabled" };
+    return { available: false, reason: "sandbox disabled", backend: sandboxBackend(config) };
+  }
+
+  const backend = sandboxBackend(config);
+  if (backend === "omnigent-managed") {
+    const status = await ensureOmnigentManagedSandbox(ctx, config);
+    if (!status.available) {
+      setStatus(ctx, "perms: omnigent-managed unavailable");
+      notify(ctx, `claude-style-permissions: ${status.reason}; command will fail closed instead of running on the host.`, "warning");
+    }
+    return status;
+  }
+
+  if (backend !== DEFAULT_SANDBOX_BACKEND) {
+    const reason = `unsupported sandbox backend '${backend}'`;
+    setStatus(ctx, "perms: backend unavailable");
+    notify(ctx, `claude-style-permissions: ${reason}; command will fail closed instead of running on the host.`, "warning");
+    return { available: false, reason, backend, failClosed: true };
   }
 
   if (state.available && state.initialized) {
     setStatus(ctx, "perms: srt-sandboxed");
-    return { available: true };
+    return { available: true, backend };
   }
 
   if (state.failure) {
     setStatus(ctx, "perms: classify-only (srt unavailable)");
-    return { available: false, reason: state.failure.message ?? String(state.failure) };
+    return { available: false, reason: state.failure.message ?? String(state.failure), backend };
   }
 
   if (!state.initializing) {
@@ -131,14 +170,14 @@ export async function ensureSandbox(ctx, config = {}) {
         state.initialized = true;
         state.available = true;
         setStatus(ctx, "perms: srt-sandboxed");
-        return { available: true };
+        return { available: true, backend };
       } catch (error) {
         state.initialized = false;
         state.available = false;
         state.failure = error instanceof Error ? error : new Error(String(error));
         setStatus(ctx, "perms: classify-only (srt unavailable)");
         notify(ctx, `claude-style-permissions: srt sandbox unavailable; falling back to classify-only mode: ${state.failure.message}`, "warning");
-        return { available: false, reason: state.failure.message };
+        return { available: false, reason: state.failure.message, backend };
       } finally {
         state.initializing = null;
       }

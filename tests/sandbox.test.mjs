@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import test from "node:test";
 import { SandboxManager } from "@anthropic-ai/sandbox-runtime";
-import { deriveSandboxConfig } from "../src/sandbox.js";
+import { deriveSandboxConfig, sandboxBackend, sandboxBackendFailsClosed } from "../src/sandbox.js";
 import { decide } from "../src/pipeline.js";
 
 const EXTENSION_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -44,6 +44,15 @@ function integrationUnavailableReason() {
 async function wait(ms) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+test("normalizes sandbox backend selection", () => {
+  assert.equal(sandboxBackend({}), "srt");
+  assert.equal(sandboxBackend({ sandbox: { backend: "srt" } }), "srt");
+  assert.equal(sandboxBackend({ sandbox: { backend: "omnigent" } }), "omnigent-managed");
+  assert.equal(sandboxBackend({ sandbox: { backend: "omnigent-managed" } }), "omnigent-managed");
+  assert.equal(sandboxBackendFailsClosed({ sandbox: { backend: "omnigent-managed" } }), true);
+  assert.equal(sandboxBackendFailsClosed({ sandbox: { backend: "srt" } }), false);
+});
 
 test("deriveSandboxConfig expands defaults and overrides", () => {
   const cwd = resolve(tmpdir(), "derive-sandbox-config-project");
