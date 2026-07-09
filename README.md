@@ -108,6 +108,28 @@ Network is blocked by default (`sandbox.allowedDomains: []`). Read access is bro
 
 When the OS blocks a command, the result is annotated with recorded sandbox violations when available, e.g. `[sandbox] 1 violation(s): ...`.
 
+## Local audit logging
+
+The extension writes a local JSONL audit trail by default under:
+
+```text
+~/.pi/agent/claude-style-permissions/audit/audit-YYYY-MM-DD.jsonl
+```
+
+Set `auditLog.directory`, `auditLog.fileNamePrefix`, or `auditLog.enabled: false` in config to change or disable it. `PI_CLAUDE_STYLE_PERMISSIONS_AUDIT_DIR` can also override the directory for local testing.
+
+Logged events are best-effort and non-blocking:
+
+- `tool_call_allowed` when a Bash tool call is allowed through to sandboxed or unsandboxed execution;
+- `approval_requested` when the extension asks for user approval;
+- `approval_outcome` when the approval returns, including `waitDurationMs`, `approved`, and an outcome such as `approve_once`, `approve_always`, `denied`, `cancelled`, or `no_ui`.
+
+Each entry includes the Pi session JSONL path/basename when available (`session.sessionFile`), session id, leaf/assistant entry id, Bash `toolCallId`, and current `turnIndex`/turn timestamp when Pi exposes them. Command context uses a SHA-256 hash, byte length, redacted/truncated preview, and redacted normalized subcommand previews; it intentionally does not store raw tool payloads, command output, environment variables, or approval prompt text.
+
+Privacy stance: common credential shapes are redacted (bearer/basic auth, token/password/api-key flags and query parameters, secret-looking environment assignments, GitHub/Slack/OpenAI-style tokens, AWS access keys, and URL userinfo). Non-secret arguments and local path fragments may still appear in the preview, so keep logs local and disable audit logging for sessions where even redacted command previews are too sensitive.
+
+Fail behavior: logging failures are swallowed after recording the in-memory last logger error. Audit logging is not a permission boundary; a logger failure never turns a denied command into an allowed command and never bypasses an approval. The already-computed permission decision continues, so an allowed command is not blocked solely because the local audit file is unavailable. Files rotate daily by filename; no automatic retention/deletion is implemented yet.
+
 ## Escalation protocol for the model
 
 The Bash schema includes `dangerouslyDisableSandbox?: boolean`.
@@ -132,6 +154,12 @@ Copy `config.example.json` to `config.json` next to the extension, or to `.pi/cl
   "noUiAskDecision": "deny",
   "autoApproveAsk": false,
   "sandboxToggleShortcut": "ctrl+shift+p",
+  "auditLog": {
+    "enabled": true,
+    "directory": "~/.pi/agent/claude-style-permissions/audit",
+    "fileNamePrefix": "audit",
+    "maxCommandPreviewChars": 240
+  },
   "importClaudeCodeSettings": true,
   "persistApprovalsToClaudeCodeSettings": true,
   "writeClaudeCodeSettingsPath": ".claude/settings.local.json",

@@ -24,12 +24,20 @@ import {
   shutdown,
   wrapCommand
 } from "./src/sandbox.js";
+import {
+  __resetAuditLoggerForTests,
+  __setAuditLoggerForTests,
+  createApprovalId,
+  createAuditContext,
+  flushAuditLogger
+} from "./src/audit-log.js";
 
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
 const EXTENSION_CONFIG_PATH = join(EXTENSION_DIR, "config.json");
 const PROJECT_CONFIG_RELATIVE_PATH = [".pi", "claude-style-permissions.json"];
 let piSdkOverride;
 let runtimeSandboxEnabledOverride;
+let currentTurnRef;
 
 export function __setPiSdkForTests(sdk) {
   piSdkOverride = sdk;
@@ -38,11 +46,15 @@ export function __setPiSdkForTests(sdk) {
 export function __resetPiSdkForTests() {
   piSdkOverride = undefined;
   runtimeSandboxEnabledOverride = undefined;
+  currentTurnRef = undefined;
 }
 
 export function __resetRuntimeStateForTests() {
   runtimeSandboxEnabledOverride = undefined;
+  currentTurnRef = undefined;
 }
+
+export { __resetAuditLoggerForTests, __setAuditLoggerForTests };
 
 async function loadPiSdk() {
   if (piSdkOverride) return piSdkOverride;
@@ -195,11 +207,9 @@ function appendAnnotationToResult(result, annotation, violations) {
   };
 }
 
-async function askForApproval(ctx, config, command, decision, { safety = false, target = "unsandboxed" } = {}) {
-  if (!ctx.hasUI) {
-    return { approved: false, reason: `Permission required but no UI is available: ${decision.reason}` };
-  }
-
+async function askForApproval(ctx, config, command, decision, { safety = false, target = "unsandboxed", audit } = {}) {
+  const approvalId = createApprovalId();
+  const startedAt = Date.now();
   const suggestedRule = safety ? undefined : (decision.suggestedRule ?? suggestClaudeAllowRule(classifyBashCommand(command, { ...config, mode: "default", sandboxActive: false })));
   const approveOnce = "Yes, approve once";
   const approveAlways = suggestedRule ? `Yes, and don't ask again for ${suggestedRule}` : undefined;
@@ -207,15 +217,82 @@ async function askForApproval(ctx, config, command, decision, { safety = false, 
   const options = approveAlways && config.persistApprovalsToClaudeCodeSettings !== false
     ? [approveOnce, approveAlways, deny]
     : [approveOnce, deny];
+  const optionKinds = options.map((option) => {
+    if (option === approveOnce) return "approve_once";
+    if (option === approveAlways) return "approve_always";
+    return "deny";
+  });
 
-  const choice = await ctx.ui.select(`${compactPrompt(command, decision.reason, config)}\n\nProceed ${target}?`, options);
-  if (choice === approveOnce) return { approved: true };
-  if (approveAlways && choice === approveAlways) {
-    persistClaudeAllowRule(ctx, config, suggestedRule);
-    return { approved: true };
+  audit?.logApprovalRequested({
+    id: approvalId,
+    target,
+    reason: decision.reason,
+    safety: safety === true,
+    uiAvailable: ctx.hasUI === true,
+    suggestedRule,
+    optionKinds
+  });
+
+  const waitDurationMs = () => Math.max(0, Date.now() - startedAt);
+
+  if (!ctx.hasUI) {
+    audit?.logApprovalOutcome({
+      id: approvalId,
+      target,
+      approved: false,
+      outcome: "no_ui",
+      waitDurationMs: waitDurationMs()
+    });
+    return { approved: false, approvalId, reason: `Permission required but no UI is available: ${decision.reason}` };
   }
 
-  return { approved: false, reason: "Blocked by user via claude-style-permissions" };
+  let choice;
+  try {
+    choice = await ctx.ui.select(`${compactPrompt(command, decision.reason, config)}\n\nProceed ${target}?`, options);
+  } catch (error) {
+    audit?.logApprovalOutcome({
+      id: approvalId,
+      target,
+      approved: false,
+      outcome: "ui_error",
+      waitDurationMs: waitDurationMs(),
+      errorType: error instanceof Error ? error.name : typeof error
+    });
+    throw error;
+  }
+
+  if (choice === approveOnce) {
+    audit?.logApprovalOutcome({
+      id: approvalId,
+      target,
+      approved: true,
+      outcome: "approve_once",
+      waitDurationMs: waitDurationMs()
+    });
+    return { approved: true, approvalId };
+  }
+  if (approveAlways && choice === approveAlways) {
+    const persisted = persistClaudeAllowRule(ctx, config, suggestedRule);
+    audit?.logApprovalOutcome({
+      id: approvalId,
+      target,
+      approved: true,
+      outcome: "approve_always",
+      waitDurationMs: waitDurationMs(),
+      persistedRule: suggestedRule,
+      persisted
+    });
+    return { approved: true, approvalId };
+  }
+
+  audit?.logApprovalOutcome({
+    id: approvalId,
+    target,
+    approved: false,
+    outcome: choice === deny ? "denied" : "cancelled",
+    waitDurationMs: waitDurationMs()
+  });
+  return { approved: false, approvalId, reason: "Blocked by user via claude-style-permissions" };
 }
 
 function sandboxAnnotationEnabled(config) {
@@ -365,6 +442,17 @@ export default async function (pi) {
         throw new Error(`Denied by claude-style-permissions: ${pipelineDecision.reason}`);
       }
 
+      const audit = createAuditContext({
+        config,
+        ctx,
+        toolCallId: id,
+        command,
+        decision: pipelineDecision,
+        sandboxStatus,
+        dangerouslyDisableSandbox: params.dangerouslyDisableSandbox === true,
+        turnRef: currentTurnRef
+      });
+
       const runSandboxed = async () => {
         const wrapped = await wrapCommand(command, signal);
         const sandboxTool = createBashTool(localCwd, { operations: createSandboxOperations(localOperations) });
@@ -384,10 +472,12 @@ export default async function (pi) {
         }
       };
 
+      let approval;
       if (pipelineDecision.action === "ask-sandboxed" || pipelineDecision.action === "ask-unsandboxed") {
-        const approval = await askForApproval(ctx, config, command, pipelineDecision, {
+        approval = await askForApproval(ctx, config, command, pipelineDecision, {
           safety: pipelineDecision.safety === true,
-          target: pipelineDecision.action === "ask-sandboxed" ? "sandboxed" : "unsandboxed"
+          target: pipelineDecision.action === "ask-sandboxed" ? "sandboxed" : "unsandboxed",
+          audit
         });
         if (!approval.approved) {
           throw new Error(approval.reason ?? "Blocked by claude-style-permissions");
@@ -395,9 +485,11 @@ export default async function (pi) {
       }
 
       if (pipelineDecision.action === "run-sandboxed" || pipelineDecision.action === "ask-sandboxed") {
+        audit.logAllowed({ approvalId: approval?.approvalId, executionTarget: "sandboxed" });
         return runSandboxed();
       }
 
+      audit.logAllowed({ approvalId: approval?.approvalId, executionTarget: "unsandboxed" });
       return localBash.execute(id, { command, timeout }, signal, onUpdate, ctx);
     }
   });
@@ -408,7 +500,19 @@ export default async function (pi) {
   });
 
   pi.on?.("session_shutdown", async () => {
+    await flushAuditLogger();
     await shutdown();
+  });
+
+  pi.on?.("turn_start", async (event) => {
+    currentTurnRef = {
+      turnIndex: event?.turnIndex,
+      timestamp: event?.timestamp
+    };
+  });
+
+  pi.on?.("turn_end", async () => {
+    currentTurnRef = undefined;
   });
 
   pi.on?.("before_agent_start", async (event, ctx) => {
