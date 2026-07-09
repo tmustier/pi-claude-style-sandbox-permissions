@@ -86,18 +86,25 @@ For each `bash` tool call the extension overrides Pi's built-in Bash tool and ap
 4. `dangerouslyDisableSandbox: true` requests an unsandboxed retry and prompts unless an explicit allow rule already matches; the flag itself is not an approval path.
 5. Claude Code allow rules (`Bash(git push:*)`) run unsandboxed with no prompt, except hard safety denies still win.
 6. `sandbox.excludedCommands` skip the sandbox and prompt.
-7. Everything else runs in the OS sandbox with no prompt.
-8. If the sandbox is disabled or unavailable, read-only commands may still run, but local mutations fail closed to an explicit UI approval instead of using coding-mode accept-edits shortcuts.
+7. Everything else runs through the configured sandbox backend with no prompt (`srt` by default, or the experimental `omnigent-managed` backend when explicitly configured).
+8. If the default `srt` sandbox is disabled or unavailable, read-only commands may still run, but local mutations fail closed to an explicit UI approval instead of using coding-mode accept-edits shortcuts.
+9. If an explicit non-`srt` backend is unavailable, Bash fails closed instead of silently falling back to local host execution.
 
-On macOS, enforcement uses Apple's Seatbelt via `/usr/bin/sandbox-exec` through `srt`. Other platforms fall back to classify-only unless `srt` supports them and initializes successfully.
+On macOS, the default `srt` backend uses Apple's Seatbelt via `/usr/bin/sandbox-exec`. Other platforms fall back to classify-only unless `srt` supports them and initializes successfully.
 
 ## Gondolin / micro-VM evaluation
 
 Gondolin is being tracked separately as an opt-in local micro-VM backend, not as part of the default `srt` path. See [`docs/gondolin-evaluation.md`](docs/gondolin-evaluation.md) for the issue #4 recommendation, setup requirements, fail-closed semantics, future backend slice, tests, and risks.
 
+## Omnigent managed backend
+
+Issue #3 now has a real opt-in first slice: set `sandbox.backend` to `"omnigent-managed"` to route sandboxed Bash through an existing Omnigent managed session's environment shell API. The backend fails closed if the Omnigent server/session/auth/runner is unavailable and never silently falls back to local host Bash. It is experimental and not the default; automatic managed-session creation, workspace sync, credential scoping, and lifecycle policy remain separate follow-up work.
+
+See [`docs/omnigent-managed-backend.md`](docs/omnigent-managed-backend.md) for setup, safety semantics, the Modal-first recommendation, and the remaining blocked product/API choices.
+
 ## Sandbox defaults
 
-Sandboxed commands can write to:
+With the default `srt` backend, sandboxed commands can write to:
 
 - the current Pi workspace (`ctx.cwd`)
 - `/tmp`
@@ -107,6 +114,8 @@ Sandboxed commands can write to:
 Network is blocked by default (`sandbox.allowedDomains: []`). Read access is broad except a short sensitive default deny list: `~/.ssh`, `~/.aws`, `~/.gnupg` plus `sandbox.denyRead`.
 
 When the OS blocks a command, the result is annotated with recorded sandbox violations when available, e.g. `[sandbox] 1 violation(s): ...`.
+
+With `sandbox.backend: "omnigent-managed"`, filesystem and network policy come from the configured Omnigent session/environment. This extension only decides whether Bash reaches that backend and fails closed if it cannot.
 
 ## Escalation protocol for the model
 
@@ -145,12 +154,19 @@ Copy `config.example.json` to `config.json` next to the extension, or to `.pi/cl
   "claudeDenyRules": [],
   "sandbox": {
     "enabled": true,
+    "backend": "srt", // "srt" | "omnigent-managed"
     "allowedDomains": [],
     "allowWrite": [],
     "denyWrite": [],
     "denyRead": [],
     "excludedCommands": [],
-    "annotateViolations": true
+    "annotateViolations": true,
+    "omnigent": {
+      "serverUrl": "https://your-omnigent-server.example",
+      "sessionId": "conv_...",
+      "environmentId": "default",
+      "bearerTokenEnv": "OMNIGENT_BEARER_TOKEN"
+    }
   }
 }
 ```
@@ -172,6 +188,8 @@ Examples:
 - Configure the shortcut with `"sandboxToggleShortcut": "ctrl+alt+p"`, use an array for multiple bindings, or set it to `null`, `false`, `"none"`, or `"disabled"` to disable registration.
 - Status line:
   - `perms: srt-sandboxed`
+  - `perms: omnigent-managed`
+  - `perms: omnigent-managed unavailable`
   - `perms: classify-only (srt unavailable)`
   - `perms: classify-only (sandbox disabled)`
   - `perms: classify-only (shortcut override)`

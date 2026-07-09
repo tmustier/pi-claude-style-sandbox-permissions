@@ -136,12 +136,14 @@ export const DEFAULT_CONFIG = {
   claudeDenyRules: [],
   sandbox: {
     enabled: true,
+    backend: "srt",
     allowedDomains: [],
     allowWrite: [],
     denyWrite: [],
     denyRead: [],
     excludedCommands: [],
-    annotateViolations: true
+    annotateViolations: true,
+    omnigent: {}
   }
 };
 
@@ -174,6 +176,11 @@ export function mergeConfig(base = DEFAULT_CONFIG, override = {}) {
         const baseValues = Array.isArray(baseSandbox[key]) ? baseSandbox[key] : [];
         merged.sandbox[key] = [...baseValues, ...overrideSandbox[key]];
       }
+    }
+    if (baseSandbox.omnigent || overrideSandbox.omnigent) {
+      const baseOmnigent = baseSandbox.omnigent && typeof baseSandbox.omnigent === "object" ? baseSandbox.omnigent : {};
+      const overrideOmnigent = overrideSandbox.omnigent && typeof overrideSandbox.omnigent === "object" ? overrideSandbox.omnigent : {};
+      merged.sandbox.omnigent = { ...baseOmnigent, ...overrideOmnigent };
     }
   }
 

@@ -169,6 +169,35 @@ async function makeContext({ cwd, trusted = true, hasUI = false, select } = {}) 
   };
 }
 
+function jsonResponse(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" }
+  });
+}
+
+function installMockFetch(t, handler) {
+  const previousFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), init });
+    return handler(String(url), init, calls);
+  };
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  return calls;
+}
+
+function setEnvForTest(t, key, value) {
+  const previous = process.env[key];
+  process.env[key] = value;
+  t.after(() => {
+    if (previous === undefined) delete process.env[key];
+    else process.env[key] = previous;
+  });
+}
+
 async function runBashTool(t, command, options = {}, params = {}) {
   const installed = await installExtension(t, { sandboxManager: options.sandboxManager });
   const context = await makeContext(options);
@@ -389,6 +418,115 @@ test("explicit UI approval can run sandbox-unavailable fallback unsandboxed", as
 
   assert.equal(run.error, undefined);
   assert.equal(run.executions.at(-1).command, "git rm -f -- file.txt");
+});
+
+test("omnigent-managed backend executes sandboxed Bash through the remote shell endpoint", async (t) => {
+  const cwd = await makeTempProject(t);
+  await mkdir(join(cwd, ".pi"), { recursive: true });
+  await writeFile(join(cwd, ".pi", "claude-style-permissions.json"), JSON.stringify({
+    sandbox: {
+      backend: "omnigent-managed",
+      omnigent: {
+        serverUrl: "https://omni.example",
+        sessionId: "conv_123",
+        environmentId: "default",
+        bearerTokenEnv: "OMNI_TEST_TOKEN"
+      }
+    }
+  }));
+  setEnvForTest(t, "OMNI_TEST_TOKEN", "secret-token");
+
+  const calls = installMockFetch(t, (url, init) => {
+    if (url === "https://omni.example/v1/sessions/conv_123?include_items=false&include_liveness=true") {
+      assert.equal(init.method, "GET");
+      assert.equal(init.headers.Authorization, "Bearer secret-token");
+      return jsonResponse({ id: "conv_123", runner_online: true, sandbox_status: null });
+    }
+    if (url === "https://omni.example/v1/sessions/conv_123/resources/environments/default/shell") {
+      assert.equal(init.method, "POST");
+      assert.equal(init.headers.Authorization, "Bearer secret-token");
+      assert.equal(init.headers["Content-Type"], "application/json");
+      assert.deepEqual(JSON.parse(init.body), { command: "git status --short" });
+      return jsonResponse({
+        object: "session.environment.shell_result",
+        stdout: "remote ok\n",
+        stderr: "",
+        exit_code: 0,
+        timed_out: false,
+        cwd: "/workspace"
+      });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+
+  const run = await runBashTool(t, "git status --short", { cwd, trusted: true, hasUI: false });
+  assert.equal(run.error, undefined);
+  assert.equal(run.result.content[0].text, "remote ok\n");
+  assert.equal(run.executions.length, 0);
+  assert.deepEqual(calls.map((call) => call.init.method), ["GET", "POST"]);
+  assert.equal(run.statuses.at(-1).value, "perms: omnigent-managed");
+});
+
+test("omnigent-managed backend missing setup fails closed without local fallback", async (t) => {
+  const cwd = await makeTempProject(t);
+  await mkdir(join(cwd, ".pi"), { recursive: true });
+  await writeFile(join(cwd, ".pi", "claude-style-permissions.json"), JSON.stringify({
+    sandbox: { backend: "omnigent-managed" }
+  }));
+  const calls = installMockFetch(t, () => {
+    throw new Error("fetch should not be called for missing config");
+  });
+
+  const run = await runBashTool(t, "git status --short", { cwd, trusted: true, hasUI: false });
+  assert.match(run.error?.message, /Sandbox backend unavailable; command was not run: Omnigent managed backend is not configured/);
+  assert.equal(run.executions.length, 0);
+  assert.equal(calls.length, 0);
+});
+
+test("omnigent-managed backend unavailable fails closed even for read-only commands", async (t) => {
+  const cwd = await makeTempProject(t);
+  await mkdir(join(cwd, ".pi"), { recursive: true });
+  await writeFile(join(cwd, ".pi", "claude-style-permissions.json"), JSON.stringify({
+    sandbox: {
+      backend: "omnigent-managed",
+      omnigent: {
+        serverUrl: "https://omni.example",
+        sessionId: "conv_down"
+      }
+    }
+  }));
+  const calls = installMockFetch(t, (url, init) => {
+    assert.equal(url, "https://omni.example/v1/sessions/conv_down?include_items=false&include_liveness=true");
+    assert.equal(init.method, "GET");
+    return jsonResponse({ error: { message: "runner unavailable" } }, 503);
+  });
+
+  const run = await runBashTool(t, "git status --short", { cwd, trusted: true, hasUI: false });
+  assert.match(run.error?.message, /Sandbox backend unavailable; command was not run: Omnigent managed backend check failed: HTTP 503: runner unavailable/);
+  assert.equal(run.executions.length, 0);
+  assert.equal(calls.length, 1);
+});
+
+test("hard-denied commands do not initialize the omnigent-managed backend", async (t) => {
+  const cwd = await makeTempProject(t);
+  await mkdir(join(cwd, ".pi"), { recursive: true });
+  await writeFile(join(cwd, ".pi", "claude-style-permissions.json"), JSON.stringify({
+    sandbox: {
+      backend: "omnigent-managed",
+      omnigent: {
+        serverUrl: "https://omni.example",
+        sessionId: "conv_123"
+      }
+    }
+  }));
+  const calls = installMockFetch(t, () => {
+    throw new Error("hard deny should not touch the backend");
+  });
+
+  const run = await runBashTool(t, "sudo bash -c 'rm -rf /'", { cwd, trusted: true, hasUI: false });
+  assert.match(run.error?.message, /Denied by claude-style-permissions/);
+  assert.equal(run.executions.length, 0);
+  assert.equal(calls.length, 0);
 });
 
 test("project settings.local Bash(git push:*) allow runs unsandboxed without prompting", async (t) => {
