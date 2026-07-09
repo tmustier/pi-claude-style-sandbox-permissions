@@ -10,6 +10,7 @@ import extension, {
   normalizeSandboxToggleShortcuts
 } from "../index.ts";
 import { __resetSandboxStateForTests, __setSandboxManagerForTests } from "../src/sandbox.js";
+import { ensureOmnigentManagedSandbox } from "../src/omnigent.js";
 
 function makeFakeSdk(executions) {
   return {
@@ -173,6 +174,13 @@ function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "content-type": "application/json" }
+  });
+}
+
+function textResponse(body, status = 200) {
+  return new Response(body, {
+    status,
+    headers: { "content-type": "text/plain" }
   });
 }
 
@@ -503,6 +511,60 @@ test("omnigent-managed backend unavailable fails closed even for read-only comma
 
   const run = await runBashTool(t, "git status --short", { cwd, trusted: true, hasUI: false });
   assert.match(run.error?.message, /Sandbox backend unavailable; command was not run: Omnigent managed backend check failed: HTTP 503: runner unavailable/);
+  assert.equal(run.executions.length, 0);
+  assert.equal(calls.length, 1);
+});
+
+test("omnigent-managed preflight malformed or non-session responses fail closed", async () => {
+  const config = {
+    sandbox: {
+      backend: "omnigent-managed",
+      omnigent: {
+        serverUrl: "https://omni.example",
+        sessionId: "conv_123"
+      }
+    }
+  };
+
+  const cases = [
+    { name: "text body", response: textResponse("not a session object") },
+    { name: "array body", response: jsonResponse(["conv_123"]) },
+    { name: "missing id", response: jsonResponse({ runner_online: true, sandbox_status: null }) },
+    { name: "wrong id", response: jsonResponse({ id: "conv_other", runner_online: true, sandbox_status: null }) },
+    { name: "malformed runner_online", response: jsonResponse({ id: "conv_123", runner_online: "yes", sandbox_status: null }) },
+    { name: "malformed sandbox_status", response: jsonResponse({ id: "conv_123", runner_online: true, sandbox_status: "ready" }) }
+  ];
+
+  for (const { name, response } of cases) {
+    const status = await ensureOmnigentManagedSandbox(undefined, config, {
+      fetchImpl: async () => response.clone()
+    });
+    assert.equal(status.available, false, name);
+    assert.equal(status.failClosed, true, name);
+    assert.match(status.reason, /malformed response/, name);
+  }
+});
+
+test("omnigent-managed malformed preflight does not run the shell endpoint or local fallback", async (t) => {
+  const cwd = await makeTempProject(t);
+  await mkdir(join(cwd, ".pi"), { recursive: true });
+  await writeFile(join(cwd, ".pi", "claude-style-permissions.json"), JSON.stringify({
+    sandbox: {
+      backend: "omnigent-managed",
+      omnigent: {
+        serverUrl: "https://omni.example",
+        sessionId: "conv_bad"
+      }
+    }
+  }));
+  const calls = installMockFetch(t, (url, init) => {
+    assert.equal(url, "https://omni.example/v1/sessions/conv_bad?include_items=false&include_liveness=true");
+    assert.equal(init.method, "GET");
+    return textResponse("not a session object");
+  });
+
+  const run = await runBashTool(t, "git status --short", { cwd, trusted: true, hasUI: false });
+  assert.match(run.error?.message, /Sandbox backend unavailable; command was not run: Omnigent managed session preflight returned malformed response/);
   assert.equal(run.executions.length, 0);
   assert.equal(calls.length, 1);
 });

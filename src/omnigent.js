@@ -194,6 +194,38 @@ function unavailable(reason) {
   return { available: false, initialized: false, reason, failClosed: true, backend: "omnigent-managed" };
 }
 
+function malformedSessionReason(reason) {
+  return `Omnigent managed session preflight returned malformed response${reason ? `: ${reason}` : ""}`;
+}
+
+function validateSessionResponse(runtime, body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return malformedSessionReason("expected a session object");
+  }
+
+  if (typeof body.id !== "string" || !body.id.trim()) {
+    return malformedSessionReason("missing session id");
+  }
+  if (body.id !== runtime.sessionId) {
+    return malformedSessionReason("session id did not match configured session");
+  }
+
+  if (body.runner_online !== undefined && body.runner_online !== null && typeof body.runner_online !== "boolean") {
+    return malformedSessionReason("runner_online must be boolean or null");
+  }
+
+  if (body.sandbox_status !== undefined && body.sandbox_status !== null) {
+    if (typeof body.sandbox_status !== "object" || Array.isArray(body.sandbox_status)) {
+      return malformedSessionReason("sandbox_status must be object or null");
+    }
+    if (body.sandbox_status.stage !== undefined && typeof body.sandbox_status.stage !== "string") {
+      return malformedSessionReason("sandbox_status.stage must be a string");
+    }
+  }
+
+  return undefined;
+}
+
 export async function ensureOmnigentManagedSandbox(ctx, config = {}, { fetchImpl = globalThis.fetch } = {}) {
   const runtime = getOmnigentManagedConfig(config);
   if (runtime.missing?.length) {
@@ -205,6 +237,9 @@ export async function ensureOmnigentManagedSandbox(ctx, config = {}, { fetchImpl
       method: "GET",
       headers: buildHeaders(runtime)
     }, { timeoutMs: runtime.ensureTimeoutMs });
+
+    const malformedReason = validateSessionResponse(runtime, body);
+    if (malformedReason) return unavailable(malformedReason);
 
     const sandboxStatus = body?.sandbox_status;
     if (sandboxStatus?.stage === "failed") {
