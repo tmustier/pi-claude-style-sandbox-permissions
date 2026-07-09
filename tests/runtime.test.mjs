@@ -4,8 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import extension, {
+  __resetAuditLoggerForTests,
   __resetPiSdkForTests,
   __resetRuntimeStateForTests,
+  __setAuditLoggerForTests,
   __setPiSdkForTests,
   normalizeSandboxToggleShortcuts,
 } from "../index.ts";
@@ -101,17 +103,61 @@ function makeFakeSandboxManager({ failInitialize = false, violations = [] } = {}
   };
 }
 
-async function installExtension(t, { sandboxManager } = {}) {
+function makeAuditRecorder() {
+  const entries = [];
+  return {
+    entries,
+    log(entry) {
+      entries.push(entry);
+      return Promise.resolve();
+    },
+    flush() {
+      return Promise.resolve();
+    },
+  };
+}
+
+function makeSessionManager({
+  sessionFile,
+  toolCallId = "tool-1",
+  command = "git status --short",
+  turnEntryId = "assistant-1",
+} = {}) {
+  const entries = [
+    {
+      type: "message",
+      id: turnEntryId,
+      parentId: "user-1",
+      timestamp: "2026-07-09T00:00:00.000Z",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: toolCallId, name: "bash", arguments: { command } }],
+      },
+    },
+  ];
+  return {
+    getSessionFile: () => sessionFile,
+    getSessionId: () => "session-1",
+    getLeafId: () => turnEntryId,
+    getBranch: () => entries,
+    getEntries: () => entries,
+  };
+}
+
+async function installExtension(t, { sandboxManager, auditLogger } = {}) {
   const handlers = new Map();
   const commands = new Map();
   const shortcuts = new Map();
   const tools = new Map();
   const executions = [];
+  const audit = auditLogger ?? makeAuditRecorder();
   __setPiSdkForTests(makeFakeSdk(executions));
   __setSandboxManagerForTests(sandboxManager ?? makeFakeSandboxManager());
+  __setAuditLoggerForTests(audit);
   t.after(() => {
     __resetPiSdkForTests();
     __resetSandboxStateForTests();
+    __resetAuditLoggerForTests();
   });
   const pi = {
     on(name, handler) {
@@ -128,7 +174,15 @@ async function installExtension(t, { sandboxManager } = {}) {
     },
   };
   await extension(pi);
-  return { handlers, commands, shortcuts, tools, executions };
+  return {
+    handlers,
+    commands,
+    shortcuts,
+    tools,
+    executions,
+    auditLogger: audit,
+    auditEntries: audit.entries ?? [],
+  };
 }
 
 async function makeTempProject(t) {
@@ -145,7 +199,7 @@ async function makeTempProject(t) {
   return root;
 }
 
-async function makeContext({ cwd, trusted = true, hasUI = false, select } = {}) {
+async function makeContext({ cwd, trusted = true, hasUI = false, select, sessionManager } = {}) {
   const notifications = [];
   const statuses = [];
   let selectPrompt;
@@ -154,6 +208,7 @@ async function makeContext({ cwd, trusted = true, hasUI = false, select } = {}) 
     ctx: {
       cwd,
       hasUI,
+      sessionManager,
       isProjectTrusted: () => trusted,
       ui: {
         notify(message, level) {
@@ -430,6 +485,77 @@ test("dangerouslyDisableSandbox needs real UI approval even when legacy auto-app
 
   assert.match(run.error?.message, /Permission required but no UI/);
   assert.equal(run.executions.length, 0);
+});
+
+test("audit logging records allowed sandboxed pass-through with session and turn references", async (t) => {
+  const cwd = await makeTempProject(t);
+  const command = "git status --short";
+  const sessionFile = join(cwd, "session.jsonl");
+  const installed = await installExtension(t);
+  const context = await makeContext({
+    cwd,
+    sessionManager: makeSessionManager({ sessionFile, command }),
+  });
+
+  await installed.handlers.get("turn_start")(
+    { turnIndex: 7, timestamp: "2026-07-09T00:00:00.000Z" },
+    context.ctx,
+  );
+  const result = await installed.tools
+    .get("bash")
+    .execute("tool-1", { command }, undefined, undefined, context.ctx);
+
+  assert.equal(result.content[0].text, `ran:SANDBOXED(${command})\n`);
+  const allowed = installed.auditEntries.find((entry) => entry.event === "tool_call_allowed");
+  assert.equal(allowed?.decision.action, "run-sandboxed");
+  assert.equal(allowed?.execution.target, "sandboxed");
+  assert.equal(allowed?.session.sessionFile, sessionFile);
+  assert.equal(allowed?.session.assistantEntryId, "assistant-1");
+  assert.equal(allowed?.session.toolCallId, "tool-1");
+  assert.equal(allowed?.session.turnIndex, 7);
+  assert.equal(allowed?.command.hash.length, 64);
+  assert.equal(allowed?.command.preview, command);
+});
+
+test("audit logging records approval request, wait outcome, and redacted command summary", async (t) => {
+  const cwd = await makeTempProject(t);
+  const command = "git push origin main --password placeholder-value";
+  const run = await runBashTool(
+    t,
+    command,
+    {
+      cwd,
+      trusted: true,
+      hasUI: true,
+      sessionManager: makeSessionManager({ sessionFile: join(cwd, "session.jsonl"), command }),
+      async select(_prompt, options) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return options[0];
+      },
+    },
+    { dangerouslyDisableSandbox: true },
+  );
+
+  assert.equal(run.error, undefined);
+  const requested = run.auditEntries.find((entry) => entry.event === "approval_requested");
+  const outcome = run.auditEntries.find((entry) => entry.event === "approval_outcome");
+  const allowed = run.auditEntries.find((entry) => entry.event === "tool_call_allowed");
+
+  assert.equal(requested?.approval.target, "unsandboxed");
+  assert.equal(requested?.approval.uiAvailable, true);
+  assert.deepEqual(requested?.approval.optionKinds, ["approve_once", "approve_always", "deny"]);
+  assert.equal(outcome?.approval.id, requested?.approval.id);
+  assert.equal(outcome?.approval.approved, true);
+  assert.equal(outcome?.approval.outcome, "approve_once");
+  assert.equal(typeof outcome?.approval.waitDurationMs, "number");
+  assert.ok(outcome.approval.waitDurationMs >= 0);
+  assert.equal(allowed?.approval.id, requested?.approval.id);
+  assert.equal(allowed?.decision.action, "ask-unsandboxed");
+  assert.equal(allowed?.execution.target, "unsandboxed");
+
+  const serialized = JSON.stringify(run.auditEntries);
+  assert.doesNotMatch(serialized, /placeholder-value/);
+  assert.match(serialized, /--password <redacted>/);
 });
 
 test("sandbox-unavailable and sandbox-disabled do not silently run local mutations", async (t) => {
