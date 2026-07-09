@@ -122,7 +122,10 @@ export function redactAuditString(value) {
   text = text.replace(/([?&](?:access_token|api[_-]?key|key|password|secret|token)=)[^&\s]+/gi, "$1<redacted>");
   text = text.replace(/(--?(?:access[-_]?token|api[-_]?key|password|passwd|secret|token)(?:=|\s+))([^\s]+)/gi, "$1<redacted>");
   text = text.replace(/:\/\/([^\s/@:]+):([^\s/@]+)@/g, "://<redacted>@");
-  text = text.replace(/\b(?:sk|pk|rk|ghp|gho|github_pat|xox[baprs]?)-[A-Za-z0-9_=-]{8,}\b/g, "<redacted-token>");
+  text = text.replace(/\bgithub_pat_[A-Za-z0-9_]{20,}_[A-Za-z0-9_]{20,}\b/g, "<redacted-github-token>");
+  text = text.replace(/\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g, "<redacted-github-token>");
+  text = text.replace(/\b(?:gh[pousr]|github_pat)-[A-Za-z0-9_=-]{8,}\b/g, "<redacted-github-token>");
+  text = text.replace(/\b(?:sk|pk|rk|xox[baprs]?)-[A-Za-z0-9_=-]{8,}\b/g, "<redacted-token>");
   text = text.replace(/\bAKIA[0-9A-Z]{16}\b/g, "<redacted-aws-key>");
 
   return text;

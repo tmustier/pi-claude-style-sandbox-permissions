@@ -37,3 +37,24 @@ test("audit command summaries redact common credential shapes", () => {
   assert.match(redactAuditString(command), /Bearer <redacted>/);
   assert.match(serialized, /<redacted>/);
 });
+
+test("audit command summaries redact GitHub PAT shapes from every preview", () => {
+  const classicPrefix = ["g", "h", "p", "_"].join("");
+  const fineGrainedPrefix = ["github", "pat", ""].join("_");
+  const classicPat = `${classicPrefix}${"A".repeat(36)}`;
+  const fineGrainedPat = `${fineGrainedPrefix}${"A".repeat(22)}_${"B".repeat(59)}`;
+  const command = `echo ${classicPat} ${fineGrainedPat}`;
+  const summary = summarizeCommandForAudit(command, { auditLog: { maxCommandPreviewChars: 500 } });
+  const serialized = JSON.stringify(summary);
+
+  assert.doesNotMatch(serialized, new RegExp(classicPat));
+  assert.doesNotMatch(serialized, new RegExp(fineGrainedPat));
+  assert.doesNotMatch(summary.preview, new RegExp(classicPat));
+  assert.doesNotMatch(summary.preview, new RegExp(fineGrainedPat));
+  assert.match(summary.preview, /<redacted-github-token>/);
+  for (const subcommand of summary.subcommands) {
+    assert.doesNotMatch(subcommand.normalizedPreview, new RegExp(classicPat));
+    assert.doesNotMatch(subcommand.normalizedPreview, new RegExp(fineGrainedPat));
+  }
+  assert.match(summary.subcommands[0]?.normalizedPreview ?? "", /<redacted-github-token>/);
+});
