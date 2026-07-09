@@ -20,8 +20,8 @@ function run(command, cwd, timeoutMs = 15000) {
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
     }, timeoutMs);
-    child.stdout.on("data", (data) => stdout += data);
-    child.stderr.on("data", (data) => stderr += data);
+    child.stdout.on("data", (data) => (stdout += data));
+    child.stderr.on("data", (data) => (stderr += data));
     child.on("error", reject);
     child.on("close", (code, signal) => {
       clearTimeout(timer);
@@ -47,14 +47,17 @@ async function wait(ms) {
 
 test("deriveSandboxConfig expands defaults and overrides", () => {
   const cwd = resolve(tmpdir(), "derive-sandbox-config-project");
-  const config = deriveSandboxConfig({ cwd }, {
-    sandbox: {
-      allowedDomains: ["github.com", "*.npmjs.org"],
-      allowWrite: ["~/cache", "relative-out"],
-      denyWrite: ["/blocked"],
-      denyRead: ["~/secrets"]
-    }
-  });
+  const config = deriveSandboxConfig(
+    { cwd },
+    {
+      sandbox: {
+        allowedDomains: ["github.com", "*.npmjs.org"],
+        allowWrite: ["~/cache", "relative-out"],
+        denyWrite: ["/blocked"],
+        denyRead: ["~/secrets"],
+      },
+    },
+  );
 
   assert.deepEqual(config.network.allowedDomains, ["github.com", "*.npmjs.org"]);
   assert.equal(config.network.deniedDomains.length, 0);
@@ -85,7 +88,7 @@ test("srt integration wraps commands, blocks writes, blocks network, and records
 
   const config = {
     network: { allowedDomains: [], deniedDomains: [] },
-    filesystem: { denyRead: [], allowWrite: [allowed], denyWrite: [] }
+    filesystem: { denyRead: [], allowWrite: [allowed], denyWrite: [] },
   };
 
   try {
@@ -99,15 +102,22 @@ test("srt integration wraps commands, blocks writes, blocks network, and records
   assert.equal(echo.code, 0);
   assert.equal(echo.stdout, "hi\n");
 
-  const insideWrite = await runSandboxed(`echo ok > ${JSON.stringify(join(allowed, "ok.txt"))}`, allowed);
+  const insideWrite = await runSandboxed(
+    `echo ok > ${JSON.stringify(join(allowed, "ok.txt"))}`,
+    allowed,
+  );
   assert.equal(insideWrite.code, 0);
 
   const blockedCommand = `echo no > ${JSON.stringify(blockedPath)}`;
   const blocked = await runSandboxed(blockedCommand, allowed);
   assert.notEqual(blocked.code, 0);
-  assert.match(blocked.stderr, /Operation not permitted|operation not permitted|Permission denied/i);
+  assert.match(
+    blocked.stderr,
+    /Operation not permitted|operation not permitted|Permission denied/i,
+  );
   await wait(1200);
-  const violations = SandboxManager.getSandboxViolationStore().getViolationsForCommand(blockedCommand);
+  const violations =
+    SandboxManager.getSandboxViolationStore().getViolationsForCommand(blockedCommand);
   assert.ok(violations.length > 0, "expected correlated sandbox violation");
   assert.match(violations.map((violation) => violation.line).join("\n"), /file-write/);
 
@@ -139,7 +149,7 @@ test("incident git commands decide and execute sandboxed with exit 0", async (t)
 
   const config = {
     network: { allowedDomains: [], deniedDomains: [] },
-    filesystem: { denyRead: [], allowWrite: [repo], denyWrite: [] }
+    filesystem: { denyRead: [], allowWrite: [repo], denyWrite: [] },
   };
   try {
     await SandboxManager.initialize(config, undefined, true);

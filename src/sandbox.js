@@ -17,7 +17,7 @@ function freshState() {
     store: null,
     unsubscribe: null,
     cachedViolations: [],
-    drained: new Set()
+    drained: new Set(),
   };
 }
 
@@ -33,7 +33,9 @@ export function __resetSandboxStateForTests() {
 
 function asStringArray(values) {
   return Array.isArray(values)
-    ? values.filter((value) => typeof value === "string" && value.trim()).map((value) => value.trim())
+    ? values
+        .filter((value) => typeof value === "string" && value.trim())
+        .map((value) => value.trim())
     : [];
 }
 
@@ -58,7 +60,7 @@ export function deriveSandboxConfig(ctx, config = {}) {
     cwd,
     "/tmp",
     tmpdir(),
-    ...asStringArray(sandbox.allowWrite).map(expand)
+    ...asStringArray(sandbox.allowWrite).map(expand),
   ]);
 
   const denyWrite = unique(asStringArray(sandbox.denyWrite).map(expand));
@@ -67,13 +69,13 @@ export function deriveSandboxConfig(ctx, config = {}) {
   return {
     network: {
       allowedDomains: unique(asStringArray(sandbox.allowedDomains)),
-      deniedDomains: unique(asStringArray(sandbox.deniedDomains))
+      deniedDomains: unique(asStringArray(sandbox.deniedDomains)),
     },
     filesystem: {
       denyRead,
       allowWrite,
-      denyWrite
-    }
+      denyWrite,
+    },
   };
 }
 
@@ -83,10 +85,6 @@ export function sandboxEnabled(config = {}) {
 
 function setStatus(ctx, text) {
   ctx?.ui?.setStatus?.("claude-perms", text);
-}
-
-function notify(ctx, message, level = "warning") {
-  ctx?.ui?.notify?.(message, level);
 }
 
 function attachViolationStore() {
@@ -100,8 +98,14 @@ function attachViolationStore() {
 }
 
 export function getSandboxStatus() {
-  if (state.available) return { available: true, initialized: state.initialized, reason: undefined };
-  if (state.failure) return { available: false, initialized: state.initialized, reason: state.failure.message ?? String(state.failure) };
+  if (state.available)
+    return { available: true, initialized: state.initialized, reason: undefined };
+  if (state.failure)
+    return {
+      available: false,
+      initialized: state.initialized,
+      reason: state.failure.message ?? String(state.failure),
+    };
   return { available: false, initialized: state.initialized, reason: undefined };
 }
 
@@ -137,7 +141,10 @@ export async function ensureSandbox(ctx, config = {}) {
         state.available = false;
         state.failure = error instanceof Error ? error : new Error(String(error));
         setStatus(ctx, "perms: classify-only (srt unavailable)");
-        notify(ctx, `claude-style-permissions: srt sandbox unavailable; falling back to classify-only mode: ${state.failure.message}`, "warning");
+        ctx?.ui?.notify?.(
+          `claude-style-permissions: srt sandbox unavailable; falling back to classify-only mode: ${state.failure.message}`,
+          "warning",
+        );
         return { available: false, reason: state.failure.message };
       } finally {
         state.initializing = null;
@@ -164,11 +171,12 @@ function getStoreViolationsForCommand(command) {
 }
 
 function violationFingerprint(violation) {
-  const timestamp = violation?.timestamp instanceof Date
-    ? violation.timestamp.getTime()
-    : typeof violation?.timestamp === "string"
-      ? violation.timestamp
-      : "";
+  const timestamp =
+    violation?.timestamp instanceof Date
+      ? violation.timestamp.getTime()
+      : typeof violation?.timestamp === "string"
+        ? violation.timestamp
+        : "";
   return `${violation?.encodedCommand ?? ""}\n${violation?.command ?? ""}\n${timestamp}\n${violation?.line ?? ""}`;
 }
 
@@ -187,7 +195,10 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function drainViolationsFor(command, { waitMs = 0, pollMs = 100, includeUncorrelated = true } = {}) {
+export async function drainViolationsFor(
+  command,
+  { waitMs = 0, pollMs = 100, includeUncorrelated = true } = {},
+) {
   const deadline = Date.now() + Math.max(0, waitMs);
   let matched = drainUnseen(getStoreViolationsForCommand(command));
 
@@ -200,13 +211,18 @@ export async function drainViolationsFor(command, { waitMs = 0, pollMs = 100, in
 
   // Graceful degradation for platforms/log formats that record violations but
   // cannot correlate them back to the encoded command marker.
-  return drainUnseen(state.cachedViolations.filter((violation) => !violation.command && !violation.encodedCommand));
+  return drainUnseen(
+    state.cachedViolations.filter((violation) => !violation.command && !violation.encodedCommand),
+  );
 }
 
 export function formatViolationAnnotation(violations) {
   if (!violations?.length) return "";
-  const shown = violations.slice(0, 5).map((violation) => `- ${violation.line ?? String(violation)}`);
-  const suffix = violations.length > shown.length ? `\n- ... ${violations.length - shown.length} more` : "";
+  const shown = violations
+    .slice(0, 5)
+    .map((violation) => `- ${violation.line ?? String(violation)}`);
+  const suffix =
+    violations.length > shown.length ? `\n- ... ${violations.length - shown.length} more` : "";
   return `[sandbox] ${violations.length} violation(s):\n${shown.join("\n")}${suffix}`;
 }
 

@@ -4,7 +4,7 @@ import {
   firstMatchingBashRule,
   mergeConfig,
   DEFAULT_CONFIG,
-  suggestClaudeAllowRule
+  suggestClaudeAllowRule,
 } from "./policy.js";
 
 function noSandboxFallbackConfig(config) {
@@ -18,13 +18,12 @@ function fallbackSuggestedRule(command, config) {
   return suggestClaudeAllowRule(classifyBashCommand(command, noSandboxFallbackConfig(config)));
 }
 
-function sandboxIsEnabled(config) {
-  return config.sandbox?.enabled !== false;
-}
-
-export function decide(command, { config = {}, dangerouslyDisableSandbox = false, sandboxAvailable = false } = {}) {
+export function decide(
+  command,
+  { config = {}, dangerouslyDisableSandbox = false, sandboxAvailable = false } = {},
+) {
   const merged = mergeConfig(DEFAULT_CONFIG, config);
-  const sandboxActive = sandboxIsEnabled(merged) && sandboxAvailable;
+  const sandboxActive = merged.sandbox?.enabled !== false && sandboxAvailable;
   const policyConfig = { ...merged, sandboxActive };
 
   const denyDecision = classifyBashCommand(command, policyConfig);
@@ -52,7 +51,7 @@ export function decide(command, { config = {}, dangerouslyDisableSandbox = false
     return {
       action: "ask-unsandboxed",
       reason: "dangerouslyDisableSandbox requested",
-      suggestedRule: fallbackSuggestedRule(command, merged)
+      suggestedRule: fallbackSuggestedRule(command, merged),
     };
   }
 
@@ -61,7 +60,7 @@ export function decide(command, { config = {}, dangerouslyDisableSandbox = false
     return {
       action: "ask-unsandboxed",
       reason: `matched Claude Code ask rule '${askRule}'`,
-      suggestedRule: fallbackSuggestedRule(command, merged)
+      suggestedRule: fallbackSuggestedRule(command, merged),
     };
   }
 
@@ -69,12 +68,16 @@ export function decide(command, { config = {}, dangerouslyDisableSandbox = false
     return { action: "run-unsandboxed", reason: `matched Claude Code allow rule '${allowRule}'` };
   }
 
-  const excludedRule = firstMatchingBashRule(command, merged.sandbox?.excludedCommands ?? [], merged);
+  const excludedRule = firstMatchingBashRule(
+    command,
+    merged.sandbox?.excludedCommands ?? [],
+    merged,
+  );
   if (excludedRule) {
     return {
       action: "ask-unsandboxed",
       reason: `matched sandbox excluded command '${excludedRule}'`,
-      suggestedRule: fallbackSuggestedRule(command, merged)
+      suggestedRule: fallbackSuggestedRule(command, merged),
     };
   }
 
@@ -92,6 +95,6 @@ export function decide(command, { config = {}, dangerouslyDisableSandbox = false
   return {
     action: "ask-unsandboxed",
     reason: fallbackDecision.reason,
-    suggestedRule: suggestClaudeAllowRule(fallbackDecision)
+    suggestedRule: suggestClaudeAllowRule(fallbackDecision),
   };
 }

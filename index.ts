@@ -6,13 +6,13 @@ import {
   DEFAULT_CONFIG,
   formatDecision,
   mergeConfig,
-  suggestClaudeAllowRule
+  suggestClaudeAllowRule,
 } from "./src/policy.js";
 import { decide } from "./src/pipeline.js";
 import {
   loadClaudeCodePermissionConfig,
   persistClaudeAllowRule,
-  readJsonIfPresent
+  readJsonIfPresent,
 } from "./src/claude-settings.js";
 import {
   cleanupAfterCommand,
@@ -22,7 +22,7 @@ import {
   getSandboxStatus,
   sandboxEnabled,
   shutdown,
-  wrapCommand
+  wrapCommand,
 } from "./src/sandbox.js";
 
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
@@ -51,23 +51,15 @@ async function loadPiSdk() {
   return import("@earendil-works/pi-coding-agent");
 }
 
-function applyRuntimeSandboxOverride(config) {
-  if (runtimeSandboxEnabledOverride === undefined) return config;
-  return {
-    ...config,
-    sandbox: {
-      ...(config.sandbox ?? {}),
-      enabled: runtimeSandboxEnabledOverride
-    }
-  };
-}
-
 function loadConfig(ctx) {
   let config = DEFAULT_CONFIG;
 
   const extensionConfig = readJsonIfPresent(EXTENSION_CONFIG_PATH);
   if (extensionConfig?.__configError) {
-    ctx.ui.notify?.(`claude-style-permissions: failed to parse ${extensionConfig.__path}: ${extensionConfig.__configError}`, "error");
+    ctx.ui.notify?.(
+      `claude-style-permissions: failed to parse ${extensionConfig.__path}: ${extensionConfig.__configError}`,
+      "error",
+    );
   } else if (extensionConfig) {
     config = mergeConfig(config, extensionConfig);
   }
@@ -76,7 +68,10 @@ function loadConfig(ctx) {
   if (ctx.isProjectTrusted?.()) {
     const projectConfig = readJsonIfPresent(projectConfigPath);
     if (projectConfig?.__configError) {
-      ctx.ui.notify?.(`claude-style-permissions: failed to parse ${projectConfig.__path}: ${projectConfig.__configError}`, "error");
+      ctx.ui.notify?.(
+        `claude-style-permissions: failed to parse ${projectConfig.__path}: ${projectConfig.__configError}`,
+        "error",
+      );
     } else if (projectConfig) {
       config = mergeConfig(config, projectConfig);
     }
@@ -86,7 +81,14 @@ function loadConfig(ctx) {
     config = mergeConfig(config, loadClaudeCodePermissionConfig(ctx, config));
   }
 
-  return applyRuntimeSandboxOverride(config);
+  if (runtimeSandboxEnabledOverride === undefined) return config;
+  return {
+    ...config,
+    sandbox: {
+      ...(config.sandbox ?? {}),
+      enabled: runtimeSandboxEnabledOverride,
+    },
+  };
 }
 
 export function normalizeSandboxToggleShortcuts(value = DEFAULT_CONFIG.sandboxToggleShortcut) {
@@ -109,13 +111,19 @@ function loadConfiguredSandboxToggleShortcuts() {
 
 function setPermissionStatus(ctx, config, reason) {
   if (!sandboxEnabled(config)) {
-    ctx.ui.setStatus?.("claude-perms", reason === "shortcut"
-      ? "perms: classify-only (shortcut override)"
-      : "perms: classify-only (sandbox disabled)");
+    ctx.ui.setStatus?.(
+      "claude-perms",
+      reason === "shortcut"
+        ? "perms: classify-only (shortcut override)"
+        : "perms: classify-only (sandbox disabled)",
+    );
     return;
   }
   const status = getSandboxStatus();
-  ctx.ui.setStatus?.("claude-perms", status.reason ? "perms: classify-only (srt unavailable)" : "perms: srt-sandboxed");
+  ctx.ui.setStatus?.(
+    "claude-perms",
+    status.reason ? "perms: classify-only (srt unavailable)" : "perms: srt-sandboxed",
+  );
 }
 
 async function toggleSandboxForSession(ctx) {
@@ -126,7 +134,10 @@ async function toggleSandboxForSession(ctx) {
 
   if (!nextEnabled) {
     setPermissionStatus(ctx, nextConfig, "shortcut");
-    ctx.ui.notify?.("Claude-style permission sandbox disabled for this session; using classify-only checks.", "warning");
+    ctx.ui.notify?.(
+      "Claude-style permission sandbox disabled for this session; using classify-only checks.",
+      "warning",
+    );
     return;
   }
 
@@ -134,15 +145,22 @@ async function toggleSandboxForSession(ctx) {
   if (status.available) {
     ctx.ui.notify?.("Claude-style permission sandbox enabled for this session.", "info");
   } else {
-    ctx.ui.notify?.(`Claude-style permission sandbox requested, but srt is unavailable; staying classify-only: ${status.reason ?? "unknown error"}`, "warning");
+    ctx.ui.notify?.(
+      `Claude-style permission sandbox requested, but srt is unavailable; staying classify-only: ${status.reason ?? "unknown error"}`,
+      "warning",
+    );
   }
 }
 
 function compactPrompt(command, reason, config) {
   const decision = classifyBashCommand(command, { ...config, sandboxActive: false });
-  const details = decision.subcommands
-    ?.map((part) => `• ${part.behavior}: ${part.command}${part.normalized && part.normalized !== part.command ? ` [${part.normalized}]` : ""}\n  ${part.reason}`)
-    .join("\n") ?? "";
+  const details =
+    decision.subcommands
+      ?.map(
+        (part) =>
+          `• ${part.behavior}: ${part.command}${part.normalized && part.normalized !== part.command ? ` [${part.normalized}]` : ""}\n  ${part.reason}`,
+      )
+      .join("\n") ?? "";
 
   return [
     "Claude-style permission check wants confirmation.",
@@ -151,7 +169,7 @@ function compactPrompt(command, reason, config) {
     "",
     "Command:",
     command,
-    details ? `\nBreakdown:\n${details}` : ""
+    details ? `\nBreakdown:\n${details}` : "",
   ].join("\n");
 }
 
@@ -162,9 +180,10 @@ function extendBashParameters(parameters) {
       ...(parameters?.properties ?? {}),
       dangerouslyDisableSandbox: {
         type: "boolean",
-        description: "Retry this command outside the OS sandbox. Use only after a sandbox-caused failure or explicit user request; this triggers a permission prompt unless already allow-listed."
-      }
-    }
+        description:
+          "Retry this command outside the OS sandbox. Use only after a sandbox-caused failure or explicit user request; this triggers a permission prompt unless already allow-listed.",
+      },
+    },
   };
 }
 
@@ -180,7 +199,7 @@ function appendAnnotationToResult(result, annotation, violations) {
   if (lastTextIndex >= 0) {
     content[lastTextIndex] = {
       ...content[lastTextIndex],
-      text: appendAnnotationText(content[lastTextIndex].text, annotation)
+      text: appendAnnotationText(content[lastTextIndex].text, annotation),
     };
   } else {
     content.push({ type: "text", text: annotation });
@@ -190,25 +209,43 @@ function appendAnnotationToResult(result, annotation, violations) {
     content,
     details: {
       ...(result.details ?? {}),
-      sandboxViolations: violations.map((violation) => violation.line)
-    }
+      sandboxViolations: violations.map((violation) => violation.line),
+    },
   };
 }
 
-async function askForApproval(ctx, config, command, decision, { safety = false, target = "unsandboxed" } = {}) {
+async function askForApproval(
+  ctx,
+  config,
+  command,
+  decision,
+  { safety = false, target = "unsandboxed" } = {},
+) {
   if (!ctx.hasUI) {
-    return { approved: false, reason: `Permission required but no UI is available: ${decision.reason}` };
+    return {
+      approved: false,
+      reason: `Permission required but no UI is available: ${decision.reason}`,
+    };
   }
 
-  const suggestedRule = safety ? undefined : (decision.suggestedRule ?? suggestClaudeAllowRule(classifyBashCommand(command, { ...config, mode: "default", sandboxActive: false })));
+  const suggestedRule = safety
+    ? undefined
+    : (decision.suggestedRule ??
+      suggestClaudeAllowRule(
+        classifyBashCommand(command, { ...config, mode: "default", sandboxActive: false }),
+      ));
   const approveOnce = "Yes, approve once";
   const approveAlways = suggestedRule ? `Yes, and don't ask again for ${suggestedRule}` : undefined;
   const deny = "No";
-  const options = approveAlways && config.persistApprovalsToClaudeCodeSettings !== false
-    ? [approveOnce, approveAlways, deny]
-    : [approveOnce, deny];
+  const options =
+    approveAlways && config.persistApprovalsToClaudeCodeSettings !== false
+      ? [approveOnce, approveAlways, deny]
+      : [approveOnce, deny];
 
-  const choice = await ctx.ui.select(`${compactPrompt(command, decision.reason, config)}\n\nProceed ${target}?`, options);
+  const choice = await ctx.ui.select(
+    `${compactPrompt(command, decision.reason, config)}\n\nProceed ${target}?`,
+    options,
+  );
   if (choice === approveOnce) return { approved: true };
   if (approveAlways && choice === approveAlways) {
     persistClaudeAllowRule(ctx, config, suggestedRule);
@@ -216,10 +253,6 @@ async function askForApproval(ctx, config, command, decision, { safety = false, 
   }
 
   return { approved: false, reason: "Blocked by user via claude-style-permissions" };
-}
-
-function sandboxAnnotationEnabled(config) {
-  return config.sandbox?.annotateViolations !== false;
 }
 
 function killChildProcess(child) {
@@ -251,16 +284,17 @@ function createShellStringOperations() {
           detached: process.platform !== "win32",
           env: env ?? process.env,
           stdio: ["ignore", "pipe", "pipe"],
-          windowsHide: true
+          windowsHide: true,
         });
 
         let timedOut = false;
-        const timeoutHandle = timeout && timeout > 0
-          ? setTimeout(() => {
-            timedOut = true;
-            killChildProcess(child);
-          }, timeout * 1000)
-          : undefined;
+        const timeoutHandle =
+          timeout && timeout > 0
+            ? setTimeout(() => {
+                timedOut = true;
+                killChildProcess(child);
+              }, timeout * 1000)
+            : undefined;
         const onAbort = () => killChildProcess(child);
 
         child.stdout?.on("data", onData);
@@ -279,19 +313,7 @@ function createShellStringOperations() {
           else resolve({ exitCode: code });
         });
       });
-    }
-  };
-}
-
-function createSandboxOperations(localOperations) {
-  return {
-    async exec(command, cwd, options) {
-      try {
-        return await localOperations.exec(command, cwd, options);
-      } finally {
-        cleanupAfterCommand();
-      }
-    }
+    },
   };
 }
 
@@ -304,7 +326,7 @@ function sandboxPromptSection() {
     "If a command fails and the output shows sandbox evidence (for example Operation not permitted, denied writes outside the workspace, blocked proxy/network, or Unix socket denial), retry once with `dangerouslyDisableSandbox: true`.",
     "That retry will ask the user for permission; briefly explain which sandbox restriction appears to be responsible.",
     "Do not retry hard-denied catastrophic/root/system-destructive commands unsandboxed.",
-    "Return to normal sandboxed Bash calls after that one retry."
+    "Return to normal sandboxed Bash calls after that one retry.",
   ].join("\n");
 }
 
@@ -313,16 +335,17 @@ export default async function (pi) {
   const { createBashTool } = sdk;
   const localCwd = process.cwd();
   const localBash = createBashTool(localCwd);
-  const localOperations = typeof sdk.createLocalBashOperations === "function"
-    ? sdk.createLocalBashOperations()
-    : createShellStringOperations();
+  const localOperations =
+    typeof sdk.createLocalBashOperations === "function"
+      ? sdk.createLocalBashOperations()
+      : createShellStringOperations();
 
   for (const shortcut of loadConfiguredSandboxToggleShortcuts()) {
     pi.registerShortcut?.(shortcut, {
       description: "Toggle Claude-style permission sandbox for this session",
       handler: async (ctx) => {
         await toggleSandboxForSession(ctx);
-      }
+      },
     });
   }
 
@@ -335,12 +358,27 @@ export default async function (pi) {
         return;
       }
       const config = loadConfig(ctx);
-      const sandboxStatus = sandboxEnabled(config) ? await ensureSandbox(ctx, config) : { available: false };
-      const pipelineDecision = decide(command, { config, sandboxAvailable: sandboxStatus.available });
-      const classifierDecision = classifyBashCommand(command, { ...config, sandboxActive: sandboxStatus.available });
+      const sandboxStatus = sandboxEnabled(config)
+        ? await ensureSandbox(ctx, config)
+        : { available: false };
+      const pipelineDecision = decide(command, {
+        config,
+        sandboxAvailable: sandboxStatus.available,
+      });
+      const classifierDecision = classifyBashCommand(command, {
+        ...config,
+        sandboxActive: sandboxStatus.available,
+      });
       const text = `${formatDecision(classifierDecision)}\nPipeline action: ${pipelineDecision.action}${pipelineDecision.reason ? ` — ${pipelineDecision.reason}` : ""}`;
-      ctx.ui.notify(text, pipelineDecision.action === "deny" ? "error" : pipelineDecision.action.includes("ask") ? "warning" : "info");
-    }
+      ctx.ui.notify(
+        text,
+        pipelineDecision.action === "deny"
+          ? "error"
+          : pipelineDecision.action.includes("ask")
+            ? "warning"
+            : "info",
+      );
+    },
   });
 
   pi.registerTool?.({
@@ -354,11 +392,14 @@ export default async function (pi) {
 
       const timeout = typeof params.timeout === "number" ? params.timeout : undefined;
       const config = loadConfig(ctx);
-      const sandboxStatus = sandboxEnabled(config) ? await ensureSandbox(ctx, config) : { available: false };
+      const annotateSandboxViolations = config.sandbox?.annotateViolations !== false;
+      const sandboxStatus = sandboxEnabled(config)
+        ? await ensureSandbox(ctx, config)
+        : { available: false };
       const pipelineDecision = decide(command, {
         config,
         dangerouslyDisableSandbox: params.dangerouslyDisableSandbox === true,
-        sandboxAvailable: sandboxStatus.available
+        sandboxAvailable: sandboxStatus.available,
       });
 
       if (pipelineDecision.action === "deny") {
@@ -367,15 +408,31 @@ export default async function (pi) {
 
       const runSandboxed = async () => {
         const wrapped = await wrapCommand(command, signal);
-        const sandboxTool = createBashTool(localCwd, { operations: createSandboxOperations(localOperations) });
+        const sandboxTool = createBashTool(localCwd, {
+          operations: {
+            async exec(command, cwd, options) {
+              try {
+                return await localOperations.exec(command, cwd, options);
+              } finally {
+                cleanupAfterCommand();
+              }
+            },
+          },
+        });
         try {
-          const result = await sandboxTool.execute(id, { command: wrapped, timeout }, signal, onUpdate, ctx);
-          if (!sandboxAnnotationEnabled(config)) return result;
+          const result = await sandboxTool.execute(
+            id,
+            { command: wrapped, timeout },
+            signal,
+            onUpdate,
+            ctx,
+          );
+          if (!annotateSandboxViolations) return result;
           const violations = await drainViolationsFor(command, { waitMs: 0 });
           const annotation = formatViolationAnnotation(violations);
           return appendAnnotationToResult(result, annotation, violations);
         } catch (error) {
-          if (!sandboxAnnotationEnabled(config)) throw error;
+          if (!annotateSandboxViolations) throw error;
           const violations = await drainViolationsFor(command, { waitMs: 1200 });
           const annotation = formatViolationAnnotation(violations);
           if (!annotation) throw error;
@@ -384,22 +441,28 @@ export default async function (pi) {
         }
       };
 
-      if (pipelineDecision.action === "ask-sandboxed" || pipelineDecision.action === "ask-unsandboxed") {
+      if (
+        pipelineDecision.action === "ask-sandboxed" ||
+        pipelineDecision.action === "ask-unsandboxed"
+      ) {
         const approval = await askForApproval(ctx, config, command, pipelineDecision, {
           safety: pipelineDecision.safety === true,
-          target: pipelineDecision.action === "ask-sandboxed" ? "sandboxed" : "unsandboxed"
+          target: pipelineDecision.action === "ask-sandboxed" ? "sandboxed" : "unsandboxed",
         });
         if (!approval.approved) {
           throw new Error(approval.reason ?? "Blocked by claude-style-permissions");
         }
       }
 
-      if (pipelineDecision.action === "run-sandboxed" || pipelineDecision.action === "ask-sandboxed") {
+      if (
+        pipelineDecision.action === "run-sandboxed" ||
+        pipelineDecision.action === "ask-sandboxed"
+      ) {
         return runSandboxed();
       }
 
       return localBash.execute(id, { command, timeout }, signal, onUpdate, ctx);
-    }
+    },
   });
 
   pi.on?.("session_start", async (_event, ctx) => {

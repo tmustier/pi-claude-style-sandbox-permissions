@@ -7,7 +7,7 @@ import extension, {
   __resetPiSdkForTests,
   __resetRuntimeStateForTests,
   __setPiSdkForTests,
-  normalizeSandboxToggleShortcuts
+  normalizeSandboxToggleShortcuts,
 } from "../index.ts";
 import { __resetSandboxStateForTests, __setSandboxManagerForTests } from "../src/sandbox.js";
 
@@ -18,9 +18,10 @@ function makeFakeSdk(executions) {
         async exec(command, cwd, options = {}) {
           executions.push({ kind: "exec", command, cwd });
           options.onData?.(Buffer.from(`ran:${command}\n`));
-          const sandboxedBlocked = command.startsWith("SANDBOXED(") && command.includes("blocked-write");
+          const sandboxedBlocked =
+            command.startsWith("SANDBOXED(") && command.includes("blocked-write");
           return { exitCode: sandboxedBlocked ? 1 : 0 };
-        }
+        },
       };
     },
     createBashTool(cwd, toolOptions = {}) {
@@ -32,15 +33,16 @@ function makeFakeSdk(executions) {
         parameters: {
           type: "object",
           properties: { command: { type: "string" }, timeout: { type: "number" } },
-          required: ["command"]
+          required: ["command"],
         },
         async execute(_id, params, signal, onUpdate) {
-          const operations = toolOptions.operations ?? this.__localOperations ?? {
-            async exec(command) {
-              executions.push({ kind: "direct", command, cwd });
-              return { exitCode: 0 };
-            }
-          };
+          const operations = toolOptions.operations ??
+            this.__localOperations ?? {
+              async exec(command) {
+                executions.push({ kind: "direct", command, cwd });
+                return { exitCode: 0 };
+              },
+            };
           let output = "";
           const result = await operations.exec(params.command, cwd, {
             signal,
@@ -48,15 +50,20 @@ function makeFakeSdk(executions) {
             onData(data) {
               output += data.toString();
               onUpdate?.({ content: [{ type: "text", text: output }], details: undefined });
-            }
+            },
           });
           if (result.exitCode !== 0 && result.exitCode !== null) {
-            throw new Error(`${output || "(no output)"}\n\nCommand exited with code ${result.exitCode}`);
+            throw new Error(
+              `${output || "(no output)"}\n\nCommand exited with code ${result.exitCode}`,
+            );
           }
-          return { content: [{ type: "text", text: output || `(no output) ${params.command}` }], details: {} };
-        }
+          return {
+            content: [{ type: "text", text: output || `(no output) ${params.command}` }],
+            details: {},
+          };
+        },
       };
-    }
+    },
   };
 }
 
@@ -71,7 +78,7 @@ function makeFakeSandboxManager({ failInitialize = false, violations = [] } = {}
     },
     getViolations() {
       return violations;
-    }
+    },
   };
   return {
     initialized: false,
@@ -90,7 +97,7 @@ function makeFakeSandboxManager({ failInitialize = false, violations = [] } = {}
     cleanupAfterCommand() {},
     async reset() {
       this.initialized = false;
-    }
+    },
   };
 }
 
@@ -118,7 +125,7 @@ async function installExtension(t, { sandboxManager } = {}) {
     },
     registerTool(tool) {
       tools.set(tool.name, tool);
-    }
+    },
   };
   await extension(pi);
   return { handlers, commands, shortcuts, tools, executions };
@@ -159,13 +166,17 @@ async function makeContext({ cwd, trusted = true, hasUI = false, select } = {}) 
           selectPrompt = prompt;
           selectOptions = options;
           return select ? select(prompt, options) : undefined;
-        }
-      }
+        },
+      },
     },
     notifications,
     statuses,
-    get selectPrompt() { return selectPrompt; },
-    get selectOptions() { return selectOptions; }
+    get selectPrompt() {
+      return selectPrompt;
+    },
+    get selectOptions() {
+      return selectOptions;
+    },
   };
 }
 
@@ -176,7 +187,13 @@ async function runBashTool(t, command, options = {}, params = {}) {
   let result;
   let error;
   try {
-    result = await tool.execute("tool-1", { command, ...params }, undefined, undefined, context.ctx);
+    result = await tool.execute(
+      "tool-1",
+      { command, ...params },
+      undefined,
+      undefined,
+      context.ctx,
+    );
   } catch (err) {
     error = err;
   }
@@ -203,7 +220,10 @@ test("registers bash override, command, shortcut, lifecycle hooks, and extended 
 test("normalizes configurable sandbox toggle shortcuts", () => {
   assert.deepEqual(normalizeSandboxToggleShortcuts(), ["ctrl+shift+p"]);
   assert.deepEqual(normalizeSandboxToggleShortcuts(" Ctrl+Alt+P "), ["ctrl+alt+p"]);
-  assert.deepEqual(normalizeSandboxToggleShortcuts(["ctrl+shift+p", " alt+p ", "none", ""]), ["ctrl+shift+p", "alt+p"]);
+  assert.deepEqual(normalizeSandboxToggleShortcuts(["ctrl+shift+p", " alt+p ", "none", ""]), [
+    "ctrl+shift+p",
+    "alt+p",
+  ]);
   assert.deepEqual(normalizeSandboxToggleShortcuts(null), []);
   assert.deepEqual(normalizeSandboxToggleShortcuts(false), []);
   assert.deepEqual(normalizeSandboxToggleShortcuts("disabled"), []);
@@ -220,14 +240,26 @@ test("sandbox toggle shortcut switches the current session between sandboxed and
   assert.equal(context.statuses.at(-1).value, "perms: classify-only (shortcut override)");
   assert.equal(context.notifications.at(-1).level, "warning");
 
-  await tool.execute("tool-1", { command: "git status --short" }, undefined, undefined, context.ctx);
+  await tool.execute(
+    "tool-1",
+    { command: "git status --short" },
+    undefined,
+    undefined,
+    context.ctx,
+  );
   assert.equal(executions.at(-1).command, "git status --short");
 
   await shortcut.handler(context.ctx);
   assert.equal(context.statuses.at(-1).value, "perms: srt-sandboxed");
   assert.equal(context.notifications.at(-1).level, "info");
 
-  await tool.execute("tool-2", { command: "git status --short" }, undefined, undefined, context.ctx);
+  await tool.execute(
+    "tool-2",
+    { command: "git status --short" },
+    undefined,
+    undefined,
+    context.ctx,
+  );
   assert.equal(executions.at(-1).command, "SANDBOXED(git status --short)");
 
   __resetRuntimeStateForTests();
@@ -236,11 +268,18 @@ test("sandbox toggle shortcut switches the current session between sandboxed and
 test("imports user Claude Code settings independently of project trust", async (t) => {
   const cwd = await makeTempProject(t);
   await mkdir(process.env.CLAUDE_CONFIG_DIR, { recursive: true });
-  await writeFile(join(process.env.CLAUDE_CONFIG_DIR, "settings.json"), JSON.stringify({
-    permissions: { allow: ["Bash(git push:*)"] }
-  }));
+  await writeFile(
+    join(process.env.CLAUDE_CONFIG_DIR, "settings.json"),
+    JSON.stringify({
+      permissions: { allow: ["Bash(git push:*)"] },
+    }),
+  );
 
-  const { error, executions } = await runBashTool(t, "git push origin main", { cwd, trusted: false, hasUI: false });
+  const { error, executions } = await runBashTool(t, "git push origin main", {
+    cwd,
+    trusted: false,
+    hasUI: false,
+  });
   assert.equal(error, undefined);
   assert.equal(executions.at(-1).command, "git push origin main");
 });
@@ -248,41 +287,76 @@ test("imports user Claude Code settings independently of project trust", async (
 test("honors trusted project Claude settings and ignores untrusted project settings for unsandboxed retry", async (t) => {
   const cwd = await makeTempProject(t);
   await mkdir(join(cwd, ".claude"), { recursive: true });
-  await writeFile(join(cwd, ".claude", "settings.json"), JSON.stringify({
-    permissions: { allow: ["Bash(git push:*)"] }
-  }));
+  await writeFile(
+    join(cwd, ".claude", "settings.json"),
+    JSON.stringify({
+      permissions: { allow: ["Bash(git push:*)"] },
+    }),
+  );
 
-  const trusted = await runBashTool(t, "git push origin main", { cwd, trusted: true, hasUI: false }, { dangerouslyDisableSandbox: true });
+  const trusted = await runBashTool(
+    t,
+    "git push origin main",
+    { cwd, trusted: true, hasUI: false },
+    { dangerouslyDisableSandbox: true },
+  );
   assert.equal(trusted.error, undefined);
 
-  const untrusted = await runBashTool(t, "git push origin main", { cwd, trusted: false, hasUI: false }, { dangerouslyDisableSandbox: true });
+  const untrusted = await runBashTool(
+    t,
+    "git push origin main",
+    { cwd, trusted: false, hasUI: false },
+    { dangerouslyDisableSandbox: true },
+  );
   assert.match(untrusted.error?.message, /Permission required but no UI/);
 });
 
 test("rejects trailing-comma Claude Code settings with a warning", async (t) => {
   const cwd = await makeTempProject(t);
   await mkdir(join(cwd, ".claude"), { recursive: true });
-  await writeFile(join(cwd, ".claude", "settings.json"), `{
+  await writeFile(
+    join(cwd, ".claude", "settings.json"),
+    `{
     "permissions": {
       "allow": ["Bash(git push:*)",]
     }
-  }\n`);
+  }\n`,
+  );
 
-  const { error, notifications } = await runBashTool(t, "git push origin main", { cwd, trusted: true, hasUI: false }, { dangerouslyDisableSandbox: true });
+  const { error, notifications } = await runBashTool(
+    t,
+    "git push origin main",
+    { cwd, trusted: true, hasUI: false },
+    { dangerouslyDisableSandbox: true },
+  );
   assert.match(error?.message, /Permission required but no UI/);
-  assert.equal(notifications.some((entry) => entry.level === "warning" && entry.message.includes("failed to parse Claude Code settings")), true);
+  assert.equal(
+    notifications.some(
+      (entry) =>
+        entry.level === "warning" && entry.message.includes("failed to parse Claude Code settings"),
+    ),
+    true,
+  );
 });
 
 test("cancelled unsandboxed prompt blocks safely", async (t) => {
   const cwd = await makeTempProject(t);
-  const { error, selectOptions } = await runBashTool(t, "git push origin main", {
-    cwd,
-    trusted: true,
-    hasUI: true,
-    select: () => undefined
-  }, { dangerouslyDisableSandbox: true });
+  const { error, selectOptions } = await runBashTool(
+    t,
+    "git push origin main",
+    {
+      cwd,
+      trusted: true,
+      hasUI: true,
+      select: () => undefined,
+    },
+    { dangerouslyDisableSandbox: true },
+  );
 
-  assert.deepEqual(selectOptions?.map((option) => option.startsWith("Yes") ? "yes" : option), ["yes", "yes", "No"]);
+  assert.deepEqual(
+    selectOptions?.map((option) => (option.startsWith("Yes") ? "yes" : option)),
+    ["yes", "yes", "No"],
+  );
   assert.match(error?.message, /Blocked by user/);
 });
 
@@ -292,7 +366,7 @@ test("safety asks do not offer approve-always persistence", async (t) => {
     cwd,
     trusted: true,
     hasUI: true,
-    select: () => undefined
+    select: () => undefined,
   });
 
   assert.deepEqual(selectOptions, ["Yes, approve once", "No"]);
@@ -310,7 +384,7 @@ test("hard-denied root/system destructive commands never prompt or execute", asy
     select: () => {
       prompted = true;
       return "Yes, approve once";
-    }
+    },
   });
 
   assert.match(run.error?.message, /Denied by claude-style-permissions/);
@@ -324,7 +398,7 @@ test("approved destructive workspace safety prompt still runs inside sandbox", a
     cwd,
     trusted: true,
     hasUI: true,
-    select: (_prompt, options) => options[0]
+    select: (_prompt, options) => options[0],
   });
 
   assert.equal(run.error, undefined);
@@ -335,16 +409,24 @@ test("approved destructive workspace safety prompt still runs inside sandbox", a
 test("dangerouslyDisableSandbox needs real UI approval even when legacy auto-approve config is set", async (t) => {
   const cwd = await makeTempProject(t);
   await mkdir(join(cwd, ".pi"), { recursive: true });
-  await writeFile(join(cwd, ".pi", "claude-style-permissions.json"), JSON.stringify({
-    autoApproveAsk: true,
-    noUiAskDecision: "allow"
-  }));
+  await writeFile(
+    join(cwd, ".pi", "claude-style-permissions.json"),
+    JSON.stringify({
+      autoApproveAsk: true,
+      noUiAskDecision: "allow",
+    }),
+  );
 
-  const run = await runBashTool(t, "npm install", {
-    cwd,
-    trusted: true,
-    hasUI: false
-  }, { dangerouslyDisableSandbox: true });
+  const run = await runBashTool(
+    t,
+    "npm install",
+    {
+      cwd,
+      trusted: true,
+      hasUI: false,
+    },
+    { dangerouslyDisableSandbox: true },
+  );
 
   assert.match(run.error?.message, /Permission required but no UI/);
   assert.equal(run.executions.length, 0);
@@ -357,20 +439,23 @@ test("sandbox-unavailable and sandbox-disabled do not silently run local mutatio
     cwd: unavailableCwd,
     trusted: true,
     hasUI: false,
-    sandboxManager
+    sandboxManager,
   });
   assert.match(unavailable.error?.message, /Permission required but no UI/);
   assert.equal(unavailable.executions.length, 0);
 
   const disabledCwd = await makeTempProject(t);
   await mkdir(join(disabledCwd, ".pi"), { recursive: true });
-  await writeFile(join(disabledCwd, ".pi", "claude-style-permissions.json"), JSON.stringify({
-    sandbox: { enabled: false }
-  }));
+  await writeFile(
+    join(disabledCwd, ".pi", "claude-style-permissions.json"),
+    JSON.stringify({
+      sandbox: { enabled: false },
+    }),
+  );
   const disabled = await runBashTool(t, "git rm -f -- file.txt", {
     cwd: disabledCwd,
     trusted: true,
-    hasUI: false
+    hasUI: false,
   });
   assert.match(disabled.error?.message, /Permission required but no UI/);
   assert.equal(disabled.executions.length, 0);
@@ -384,7 +469,7 @@ test("explicit UI approval can run sandbox-unavailable fallback unsandboxed", as
     trusted: true,
     hasUI: true,
     sandboxManager,
-    select: (_prompt, options) => options[0]
+    select: (_prompt, options) => options[0],
   });
 
   assert.equal(run.error, undefined);
@@ -394,9 +479,12 @@ test("explicit UI approval can run sandbox-unavailable fallback unsandboxed", as
 test("project settings.local Bash(git push:*) allow runs unsandboxed without prompting", async (t) => {
   const cwd = await makeTempProject(t);
   await mkdir(join(cwd, ".claude"), { recursive: true });
-  await writeFile(join(cwd, ".claude", "settings.local.json"), JSON.stringify({
-    permissions: { allow: ["Bash(git push:*)"] }
-  }));
+  await writeFile(
+    join(cwd, ".claude", "settings.local.json"),
+    JSON.stringify({
+      permissions: { allow: ["Bash(git push:*)"] },
+    }),
+  );
 
   let prompted = false;
   const run = await runBashTool(t, "git push origin main", {
@@ -406,7 +494,7 @@ test("project settings.local Bash(git push:*) allow runs unsandboxed without pro
     select: () => {
       prompted = true;
       return "No";
-    }
+    },
   });
 
   assert.equal(run.error, undefined);
@@ -418,24 +506,39 @@ test("approve-always persists to settings.local.json then suppresses future prom
   const cwd = await makeTempProject(t);
   const settingsPath = join(cwd, ".claude", "settings.local.json");
   await mkdir(join(cwd, ".claude"), { recursive: true });
-  await writeFile(settingsPath, `${JSON.stringify({
-    permissions: {
-      allow: ["Bash(git status:*)"],
-      ask: ["Bash(docker:*)"]
-    },
-    env: { keep: true }
-  }, null, 2)}\n`);
+  await writeFile(
+    settingsPath,
+    `${JSON.stringify(
+      {
+        permissions: {
+          allow: ["Bash(git status:*)"],
+          ask: ["Bash(docker:*)"],
+        },
+        env: { keep: true },
+      },
+      null,
+      2,
+    )}\n`,
+  );
 
-  const first = await runBashTool(t, "git push origin main", {
-    cwd,
-    trusted: true,
-    hasUI: true,
-    select: (_prompt, options) => options.find((option) => option.includes("Bash(git push:*)"))
-  }, { dangerouslyDisableSandbox: true });
+  const first = await runBashTool(
+    t,
+    "git push origin main",
+    {
+      cwd,
+      trusted: true,
+      hasUI: true,
+      select: (_prompt, options) => options.find((option) => option.includes("Bash(git push:*)")),
+    },
+    { dangerouslyDisableSandbox: true },
+  );
 
   assert.equal(first.error, undefined);
   assert.ok(first.selectPrompt?.includes("git push origin main"));
-  assert.deepEqual(first.selectOptions?.map((option) => option.startsWith("Yes") ? "yes" : option), ["yes", "yes", "No"]);
+  assert.deepEqual(
+    first.selectOptions?.map((option) => (option.startsWith("Yes") ? "yes" : option)),
+    ["yes", "yes", "No"],
+  );
 
   const persisted = JSON.parse(await readFile(settingsPath, "utf8"));
   assert.deepEqual(persisted.env, { keep: true });
@@ -450,7 +553,7 @@ test("approve-always persists to settings.local.json then suppresses future prom
     select: () => {
       promptedAgain = true;
       return "No";
-    }
+    },
   });
 
   assert.equal(second.error, undefined);
@@ -460,12 +563,25 @@ test("approve-always persists to settings.local.json then suppresses future prom
 test("srt init failure falls back to classify-only with visible warning/status", async (t) => {
   const cwd = await makeTempProject(t);
   const sandboxManager = makeFakeSandboxManager({ failInitialize: true });
-  const { error, notifications, statuses } = await runBashTool(t, "git push origin main", { cwd, hasUI: false, sandboxManager });
+  const { error, notifications, statuses } = await runBashTool(t, "git push origin main", {
+    cwd,
+    hasUI: false,
+    sandboxManager,
+  });
   assert.match(error?.message, /Permission required but no UI/);
-  assert.equal(notifications.some((entry) => entry.level === "warning" && entry.message.includes("srt sandbox unavailable")), true);
+  assert.equal(
+    notifications.some(
+      (entry) => entry.level === "warning" && entry.message.includes("srt sandbox unavailable"),
+    ),
+    true,
+  );
   assert.equal(statuses.at(-1).value, "perms: classify-only (srt unavailable)");
 
-  const allowed = await runBashTool(t, "git status --short", { cwd, hasUI: false, sandboxManager: makeFakeSandboxManager({ failInitialize: true }) });
+  const allowed = await runBashTool(t, "git status --short", {
+    cwd,
+    hasUI: false,
+    sandboxManager: makeFakeSandboxManager({ failInitialize: true }),
+  });
   assert.equal(allowed.error, undefined);
 });
 
@@ -473,21 +589,36 @@ test("blocked sandbox write annotates output and unsandboxed retry prompts", asy
   const cwd = await makeTempProject(t);
   const command = "python -c 'blocked-write'";
   const sandboxManager = makeFakeSandboxManager({
-    violations: [{ line: "bash deny(1) file-write-create /outside", command, encodedCommand: "fake", timestamp: new Date() }]
+    violations: [
+      {
+        line: "bash deny(1) file-write-create /outside",
+        command,
+        encodedCommand: "fake",
+        timestamp: new Date(),
+      },
+    ],
   });
 
   const blocked = await runBashTool(t, command, { cwd, hasUI: false, sandboxManager });
   assert.match(blocked.error?.message, /\[sandbox\] 1 violation\(s\):/);
   assert.match(blocked.error?.message, /file-write-create \/outside/);
 
-  const retry = await runBashTool(t, command, {
-    cwd,
-    hasUI: true,
-    sandboxManager: makeFakeSandboxManager(),
-    select: (_prompt, options) => options[0]
-  }, { dangerouslyDisableSandbox: true });
+  const retry = await runBashTool(
+    t,
+    command,
+    {
+      cwd,
+      hasUI: true,
+      sandboxManager: makeFakeSandboxManager(),
+      select: (_prompt, options) => options[0],
+    },
+    { dangerouslyDisableSandbox: true },
+  );
   assert.equal(retry.error, undefined);
-  assert.deepEqual(retry.selectOptions?.map((option) => option.startsWith("Yes") ? "yes" : option), ["yes", "yes", "No"]);
+  assert.deepEqual(
+    retry.selectOptions?.map((option) => (option.startsWith("Yes") ? "yes" : option)),
+    ["yes", "yes", "No"],
+  );
 });
 
 test("incident commands run sandboxed with zero prompts", async (t) => {
@@ -499,23 +630,30 @@ test("incident commands run sandboxed with zero prompts", async (t) => {
     select: () => {
       prompted = true;
       return "No";
-    }
+    },
   });
   assert.equal(first.error, undefined);
   assert.equal(prompted, false);
   assert.equal(first.executions.at(-1).command, "SANDBOXED(git rm -f -- file.txt)");
 
-  const second = await runBashTool(t, "git add -- file.txt && git status --short | grep '^U' || true", {
-    cwd,
-    hasUI: true,
-    select: () => {
-      prompted = true;
-      return "No";
-    }
-  });
+  const second = await runBashTool(
+    t,
+    "git add -- file.txt && git status --short | grep '^U' || true",
+    {
+      cwd,
+      hasUI: true,
+      select: () => {
+        prompted = true;
+        return "No";
+      },
+    },
+  );
   assert.equal(second.error, undefined);
   assert.equal(prompted, false);
-  assert.equal(second.executions.at(-1).command, "SANDBOXED(git add -- file.txt && git status --short | grep '^U' || true)");
+  assert.equal(
+    second.executions.at(-1).command,
+    "SANDBOXED(git add -- file.txt && git status --short | grep '^U' || true)",
+  );
 });
 
 test("user_bash remains unsandboxed", async (t) => {

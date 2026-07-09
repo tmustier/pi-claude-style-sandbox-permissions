@@ -11,26 +11,11 @@
     ".claude/settings.json",
     ".claude/settings.local.json"
   ],
-  "allowPrefixes": [
-    "git add",
-    "git rm",
-    "git status"
-  ],
-  "askPrefixes": [
-    "git commit",
-    "git push",
-    "docker"
-  ],
-  "denyPrefixes": [
-    "prod-psql"
-  ],
-  "askRegexes": [
-    "[`]",
-    "\\$\\("
-  ],
-  "denyRegexes": [
-    "\\brm\\s+.*--no-preserve-root"
-  ],
+  "allowPrefixes": ["git add", "git rm", "git status"],
+  "askPrefixes": ["git commit", "git push", "docker"],
+  "denyPrefixes": ["prod-psql"],
+  "askRegexes": ["[`]", "\\$\\("],
+  "denyRegexes": ["\\brm\\s+.*--no-preserve-root"],
   "sandbox": {
     "enabled": true,
     "allowedDomains": [],

@@ -9,6 +9,11 @@
     ".": "./index.ts"
   },
   "scripts": {
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "static": "node --check index.ts src/*.js",
+    "check": "npm run lint && npm run static && npm test && npm run format:check",
     "test": "node --test tests/*.test.mjs"
   },
   "keywords": [
@@ -16,6 +21,14 @@
     "permissions",
     "bash",
     "claude-code"
+  ],
+  "files": [
+    "README.md",
+    "LICENSE",
+    "config.example.json",
+    "docs/",
+    "index.ts",
+    "src/"
   ],
   "pi": {
     "extensions": [
@@ -25,7 +38,20 @@
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "^0.70.2"
   },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.64"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "eslint": "^9.39.4",
+    "globals": "^15.15.0",
+    "prettier": "^3.9.4",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.63.0"
   }
 }

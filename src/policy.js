@@ -63,7 +63,7 @@ export const DEFAULT_CONFIG = {
     "go test",
     "cargo test",
     "make test",
-    "make lint"
+    "make lint",
   ],
   // Allowed only when mode === "coding". These are analogous to Claude Code's
   // acceptEdits allowance for local filesystem edits, with git conflict/index
@@ -82,7 +82,7 @@ export const DEFAULT_CONFIG = {
     "git restore",
     "git restore --staged",
     "git checkout --ours",
-    "git checkout --theirs"
+    "git checkout --theirs",
   ],
   askPrefixes: [
     "sudo",
@@ -114,17 +114,15 @@ export const DEFAULT_CONFIG = {
     "git merge",
     "git rebase",
     "git reset",
-    "git clean"
+    "git clean",
   ],
-  denyPrefixes: [
-    "prod-psql"
-  ],
+  denyPrefixes: ["prod-psql"],
   askRegexes: [
     "[`]",
     "\\$\\(",
     "\\b(chmod|chown)\\b.*\\b777\\b",
     "\\bcurl\\b.*\\|\\s*(?:\\S*/)?(sh|bash|zsh)\\b",
-    "\\bwget\\b.*\\|\\s*(?:\\S*/)?(sh|bash|zsh)\\b"
+    "\\bwget\\b.*\\|\\s*(?:\\S*/)?(sh|bash|zsh)\\b",
   ],
   denyRegexes: [],
   // Optional: rules imported from Claude Code settings files. Each entry uses
@@ -141,8 +139,8 @@ export const DEFAULT_CONFIG = {
     denyWrite: [],
     denyRead: [],
     excludedCommands: [],
-    annotateViolations: true
-  }
+    annotateViolations: true,
+  },
 };
 
 export function mergeConfig(base = DEFAULT_CONFIG, override = {}) {
@@ -157,7 +155,7 @@ export function mergeConfig(base = DEFAULT_CONFIG, override = {}) {
     "denyRegexes",
     "claudeAllowRules",
     "claudeAskRules",
-    "claudeDenyRules"
+    "claudeDenyRules",
   ]) {
     if (Array.isArray(override[key])) {
       const baseValues = Array.isArray(base[key]) ? base[key] : [];
@@ -167,9 +165,17 @@ export function mergeConfig(base = DEFAULT_CONFIG, override = {}) {
 
   if (base.sandbox || override.sandbox) {
     const baseSandbox = base.sandbox && typeof base.sandbox === "object" ? base.sandbox : {};
-    const overrideSandbox = override.sandbox && typeof override.sandbox === "object" ? override.sandbox : {};
+    const overrideSandbox =
+      override.sandbox && typeof override.sandbox === "object" ? override.sandbox : {};
     merged.sandbox = { ...baseSandbox, ...overrideSandbox };
-    for (const key of ["allowedDomains", "deniedDomains", "allowWrite", "denyWrite", "denyRead", "excludedCommands"]) {
+    for (const key of [
+      "allowedDomains",
+      "deniedDomains",
+      "allowWrite",
+      "denyWrite",
+      "denyRead",
+      "excludedCommands",
+    ]) {
       if (Array.isArray(overrideSandbox[key])) {
         const baseValues = Array.isArray(baseSandbox[key]) ? baseSandbox[key] : [];
         merged.sandbox[key] = [...baseValues, ...overrideSandbox[key]];
@@ -415,15 +421,29 @@ function normalizeEnvTokens(tokens) {
       return splitAndAppend(token.slice("--split-string=".length), i + 1);
     }
 
-    if (token === "-u" || token === "--unset" || token === "-C" || token === "--chdir" || token === "-a" || token === "--argv0") {
+    if (
+      token === "-u" ||
+      token === "--unset" ||
+      token === "-C" ||
+      token === "--chdir" ||
+      token === "-a" ||
+      token === "--argv0"
+    ) {
       i += 2;
       continue;
     }
-    if ((token.startsWith("-u") || token.startsWith("-C") || token.startsWith("-a")) && token.length > 2) {
+    if (
+      (token.startsWith("-u") || token.startsWith("-C") || token.startsWith("-a")) &&
+      token.length > 2
+    ) {
       i++;
       continue;
     }
-    if (token.startsWith("--unset=") || token.startsWith("--chdir=") || token.startsWith("--argv0=")) {
+    if (
+      token.startsWith("--unset=") ||
+      token.startsWith("--chdir=") ||
+      token.startsWith("--argv0=")
+    ) {
       i++;
       continue;
     }
@@ -574,10 +594,6 @@ export function firstMatchingBashRule(command, rules = [], userConfig = {}) {
   return undefined;
 }
 
-export function commandMatchesBashRule(command, rules = [], userConfig = {}) {
-  return firstMatchingBashRule(command, rules, userConfig) !== undefined;
-}
-
 const SYSTEM_ROOT_TARGETS = new Set([
   "/",
   "/Applications",
@@ -593,7 +609,7 @@ const SYSTEM_ROOT_TARGETS = new Set([
   "/System",
   "/usr",
   "/var",
-  "/Volumes"
+  "/Volumes",
 ]);
 
 const SHELL_COMMANDS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
@@ -614,7 +630,15 @@ function targetLooksCatastrophic(target) {
   // Stripping slashes from a real child path, e.g. `$HOME/project/`, still leaves
   // `$HOME/project`, so genuine subdirectories are not escalated to deny.
   const t = normalizeDestructiveTarget(target);
-  return t === "/" || t === "/*" || t === "." || t === ".." || t === "~" || t === "$HOME" || t === "${HOME}";
+  return (
+    t === "/" ||
+    t === "/*" ||
+    t === "." ||
+    t === ".." ||
+    t === "~" ||
+    t === "$HOME" ||
+    t === "${HOME}"
+  );
 }
 
 function targetLooksLikeSystemRoot(target) {
@@ -642,34 +666,58 @@ function classifyRm(tokens) {
   }
 
   const joinedOptions = optionTokens.join(" ");
-  const recursive = /(^|\s)-[^\s-]*[rR][^\s]*(\s|$)/.test(joinedOptions) || optionTokens.includes("--recursive");
-  const force = /(^|\s)-[^\s-]*f[^\s]*(\s|$)/.test(joinedOptions) || optionTokens.includes("--force");
+  const recursive =
+    /(^|\s)-[^\s-]*[rR][^\s]*(\s|$)/.test(joinedOptions) || optionTokens.includes("--recursive");
+  const force =
+    /(^|\s)-[^\s-]*f[^\s]*(\s|$)/.test(joinedOptions) || optionTokens.includes("--force");
 
   if (optionTokens.includes("--no-preserve-root")) {
-    return { behavior: "deny", reason: "rm used --no-preserve-root", allowPersistentApproval: false };
+    return {
+      behavior: "deny",
+      reason: "rm used --no-preserve-root",
+      allowPersistentApproval: false,
+    };
   }
 
   if (recursive && targets.some(targetLooksCatastrophic)) {
-    return { behavior: "deny", reason: "recursive rm targets a catastrophic path", allowPersistentApproval: false };
+    return {
+      behavior: "deny",
+      reason: "recursive rm targets a catastrophic path",
+      allowPersistentApproval: false,
+    };
   }
 
   if (recursive && targets.some(targetLooksLikeSystemRoot)) {
-    return { behavior: "deny", reason: "recursive rm targets a system root", allowPersistentApproval: false };
+    return {
+      behavior: "deny",
+      reason: "recursive rm targets a system root",
+      allowPersistentApproval: false,
+    };
   }
 
   if (recursive && force) {
-    return { behavior: "ask", reason: "recursive forced rm needs confirmation", allowPersistentApproval: false };
+    return {
+      behavior: "ask",
+      reason: "recursive forced rm needs confirmation",
+      allowPersistentApproval: false,
+    };
   }
 
   if (recursive) {
-    return { behavior: "ask", reason: "recursive rm needs confirmation", allowPersistentApproval: false };
+    return {
+      behavior: "ask",
+      reason: "recursive rm needs confirmation",
+      allowPersistentApproval: false,
+    };
   }
 
   return undefined;
 }
 
 function commandBasename(command) {
-  return String(command ?? "").split("/").pop();
+  return String(command ?? "")
+    .split("/")
+    .pop();
 }
 
 const SHELL_LONG_OPTIONS_WITH_ARG = new Set(["--init-file", "--rcfile"]);
@@ -688,7 +736,7 @@ const SHELL_PAYLOAD_PREFIX_KEYWORDS = new Set([
   "then",
   "time",
   "until",
-  "while"
+  "while",
 ]);
 
 function shellCommandFromTokens(tokens) {
@@ -739,7 +787,12 @@ function shellPayloadCommandStartIndexes(tokens) {
   const indexes = new Set([0]);
   tokens.forEach((token, index) => {
     const cleaned = cleanShellPayloadToken(token);
-    if (cleaned === "" || SHELL_PAYLOAD_PREFIX_KEYWORDS.has(cleaned) || token.includes("{") || token.includes("(")) {
+    if (
+      cleaned === "" ||
+      SHELL_PAYLOAD_PREFIX_KEYWORDS.has(cleaned) ||
+      token.includes("{") ||
+      token.includes("(")
+    ) {
       indexes.add(index + 1);
     }
   });
@@ -751,7 +804,11 @@ function classifyDestructiveShellPayload(shellCommand, depth) {
 
   for (const substitution of extractCommandSubstitutions(shellCommand)) {
     const decision = classifyDestructiveShellPayload(substitution, depth + 1);
-    if (decision?.behavior === "deny") return { ...decision, reason: `command substitution contains hard-denied operation: ${decision.reason}` };
+    if (decision?.behavior === "deny")
+      return {
+        ...decision,
+        reason: `command substitution contains hard-denied operation: ${decision.reason}`,
+      };
   }
 
   for (const subcommand of splitShellCommand(shellCommand)) {
@@ -775,7 +832,30 @@ function privilegedCommandTokens(tokens) {
       }
       if (!token.startsWith("-") || token === "-") break;
       i++;
-      if (["-u", "--user", "-g", "--group", "-h", "--host", "-p", "--prompt", "-C", "--close-from", "-T", "--command-timeout", "-D", "--chdir", "-r", "--role", "-t", "--type"].includes(token) && i < tokens.length) i++;
+      if (
+        [
+          "-u",
+          "--user",
+          "-g",
+          "--group",
+          "-h",
+          "--host",
+          "-p",
+          "--prompt",
+          "-C",
+          "--close-from",
+          "-T",
+          "--command-timeout",
+          "-D",
+          "--chdir",
+          "-r",
+          "--role",
+          "-t",
+          "--type",
+        ].includes(token) &&
+        i < tokens.length
+      )
+        i++;
     }
     return tokens.slice(i);
   }
@@ -812,11 +892,21 @@ function privilegedCommandTokens(tokens) {
 
 function classifyChmodChown(tokens) {
   if (!["chmod", "chown"].includes(tokens[0])) return undefined;
-  const recursive = tokens.some((token) => token === "-R" || token === "--recursive" || /^-[^-]*R/.test(token));
+  const recursive = tokens.some(
+    (token) => token === "-R" || token === "--recursive" || /^-[^-]*R/.test(token),
+  );
   if (!recursive) return undefined;
-  const targets = tokens.slice(1).filter((token) => !token.startsWith("-") && !/^[0-7]{3,4}$/.test(token));
-  if (targets.some((target) => targetLooksCatastrophic(target) || targetLooksLikeSystemRoot(target))) {
-    return { behavior: "deny", reason: `${tokens[0]} recursively targets a catastrophic/system path`, allowPersistentApproval: false };
+  const targets = tokens
+    .slice(1)
+    .filter((token) => !token.startsWith("-") && !/^[0-7]{3,4}$/.test(token));
+  if (
+    targets.some((target) => targetLooksCatastrophic(target) || targetLooksLikeSystemRoot(target))
+  ) {
+    return {
+      behavior: "deny",
+      reason: `${tokens[0]} recursively targets a catastrophic/system path`,
+      allowPersistentApproval: false,
+    };
   }
   return undefined;
 }
@@ -831,28 +921,56 @@ function classifyDestructiveSystemCommand(tokens, depth = 0) {
   if (chmodDecision?.behavior === "deny") return chmodDecision;
 
   if (tokens[0] === "dd" && tokens.some((token) => /^of=\/dev\/(?:r?disk|sd|nvme)/.test(token))) {
-    return { behavior: "deny", reason: "dd writes directly to a disk device", allowPersistentApproval: false };
+    return {
+      behavior: "deny",
+      reason: "dd writes directly to a disk device",
+      allowPersistentApproval: false,
+    };
   }
 
-  if (tokens[0] === "diskutil" && ["eraseDisk", "eraseVolume", "partitionDisk", "deleteVolume", "deleteContainer"].includes(tokens[1])) {
-    return { behavior: "deny", reason: `diskutil ${tokens[1]} is system-destructive`, allowPersistentApproval: false };
+  if (
+    tokens[0] === "diskutil" &&
+    ["eraseDisk", "eraseVolume", "partitionDisk", "deleteVolume", "deleteContainer"].includes(
+      tokens[1],
+    )
+  ) {
+    return {
+      behavior: "deny",
+      reason: `diskutil ${tokens[1]} is system-destructive`,
+      allowPersistentApproval: false,
+    };
   }
 
-  if (/^(?:mkfs|newfs)(?:\.|$)/.test(tokens[0]) || ["fdisk", "sfdisk", "parted"].includes(tokens[0])) {
-    return { behavior: "deny", reason: `${tokens[0]} can rewrite disks/partitions`, allowPersistentApproval: false };
+  if (
+    /^(?:mkfs|newfs)(?:\.|$)/.test(tokens[0]) ||
+    ["fdisk", "sfdisk", "parted"].includes(tokens[0])
+  ) {
+    return {
+      behavior: "deny",
+      reason: `${tokens[0]} can rewrite disks/partitions`,
+      allowPersistentApproval: false,
+    };
   }
 
   const shellCommand = shellCommandFromTokens(tokens);
   if (shellCommand) {
     const decision = classifyDestructiveShellPayload(shellCommand, depth);
-    if (decision) return { ...decision, reason: `shell command contains hard-denied operation: ${decision.reason}` };
+    if (decision)
+      return {
+        ...decision,
+        reason: `shell command contains hard-denied operation: ${decision.reason}`,
+      };
   }
 
   const privilegedTokens = privilegedCommandTokens(tokens);
   if (privilegedTokens?.length) {
     const innerTokens = normalizeTokens(privilegedTokens);
     const decision = classifyDestructiveSystemCommand(innerTokens, depth + 1);
-    if (decision) return { ...decision, reason: `privileged command contains hard-denied operation: ${decision.reason}` };
+    if (decision)
+      return {
+        ...decision,
+        reason: `privileged command contains hard-denied operation: ${decision.reason}`,
+      };
   }
 
   return undefined;
@@ -872,7 +990,17 @@ function classifyGit(tokens) {
   }
 
   if (sub === "branch") {
-    const dangerousFlags = new Set(["-d", "-D", "--delete", "-m", "-M", "--move", "-c", "-C", "--copy"]);
+    const dangerousFlags = new Set([
+      "-d",
+      "-D",
+      "--delete",
+      "-m",
+      "-M",
+      "--move",
+      "-c",
+      "-C",
+      "--copy",
+    ]);
     if (tokens.some((token) => dangerousFlags.has(token))) {
       return { behavior: "ask", reason: "mutating git branch operation needs confirmation" };
     }
@@ -1121,17 +1249,32 @@ function classifySubcommand(subcommand, config) {
 
   const denyRegex = firstMatchingRegex(normalized || subcommand, config.denyRegexes);
   if (denyRegex) {
-    return { behavior: "deny", reason: `matched deny regex /${denyRegex}/`, command: subcommand, normalized };
+    return {
+      behavior: "deny",
+      reason: `matched deny regex /${denyRegex}/`,
+      command: subcommand,
+      normalized,
+    };
   }
 
   const denyPrefix = firstMatchingPrefix(tokens, config.denyPrefixes);
   if (denyPrefix) {
-    return { behavior: "deny", reason: `matched deny prefix '${denyPrefix}'`, command: subcommand, normalized };
+    return {
+      behavior: "deny",
+      reason: `matched deny prefix '${denyPrefix}'`,
+      command: subcommand,
+      normalized,
+    };
   }
 
   const claudeDeny = firstMatchingClaudeRule(tokens, normalized, config.claudeDenyRules);
   if (claudeDeny) {
-    return { behavior: "deny", reason: `matched Claude Code deny rule '${claudeDeny}'`, command: subcommand, normalized };
+    return {
+      behavior: "deny",
+      reason: `matched Claude Code deny rule '${claudeDeny}'`,
+      command: subcommand,
+      normalized,
+    };
   }
 
   const systemDestructiveDecision = classifyDestructiveSystemCommand(tokens);
@@ -1144,19 +1287,38 @@ function classifySubcommand(subcommand, config) {
     return { ...rmDecision, command: subcommand, normalized };
   }
 
-  const askRegex = firstMatchingAskRegex(normalized || subcommand, config.askRegexes, config.sandboxActive === true);
+  const askRegex = firstMatchingAskRegex(
+    normalized || subcommand,
+    config.askRegexes,
+    config.sandboxActive === true,
+  );
   if (askRegex) {
-    return { behavior: "ask", reason: `matched ask regex /${askRegex}/`, command: subcommand, normalized };
+    return {
+      behavior: "ask",
+      reason: `matched ask regex /${askRegex}/`,
+      command: subcommand,
+      normalized,
+    };
   }
 
   const claudeAsk = firstMatchingClaudeRule(tokens, normalized, config.claudeAskRules);
   if (claudeAsk) {
-    return { behavior: "ask", reason: `matched Claude Code ask rule '${claudeAsk}'`, command: subcommand, normalized };
+    return {
+      behavior: "ask",
+      reason: `matched Claude Code ask rule '${claudeAsk}'`,
+      command: subcommand,
+      normalized,
+    };
   }
 
   const claudeAllow = firstMatchingClaudeRule(tokens, normalized, config.claudeAllowRules);
   if (claudeAllow) {
-    return { behavior: "allow", reason: `matched Claude Code allow rule '${claudeAllow}'`, command: subcommand, normalized };
+    return {
+      behavior: "allow",
+      reason: `matched Claude Code allow rule '${claudeAllow}'`,
+      command: subcommand,
+      normalized,
+    };
   }
 
   const gitDecision = classifyGit(tokens);
@@ -1166,22 +1328,42 @@ function classifySubcommand(subcommand, config) {
 
   const askPrefix = firstMatchingPrefix(tokens, config.askPrefixes);
   if (askPrefix) {
-    return { behavior: "ask", reason: `matched ask prefix '${askPrefix}'`, command: subcommand, normalized };
+    return {
+      behavior: "ask",
+      reason: `matched ask prefix '${askPrefix}'`,
+      command: subcommand,
+      normalized,
+    };
   }
 
   if (config.sandboxActive !== true && hasNonNullOutputRedirection(subcommand)) {
-    return { behavior: "ask", reason: "writes output via shell redirection", command: subcommand, normalized };
+    return {
+      behavior: "ask",
+      reason: "writes output via shell redirection",
+      command: subcommand,
+      normalized,
+    };
   }
 
   const allowPrefix = firstMatchingPrefix(tokens, config.allowPrefixes);
   if (allowPrefix) {
-    return { behavior: "allow", reason: `matched allow/read-only prefix '${allowPrefix}'`, command: subcommand, normalized };
+    return {
+      behavior: "allow",
+      reason: `matched allow/read-only prefix '${allowPrefix}'`,
+      command: subcommand,
+      normalized,
+    };
   }
 
   if (config.mode === "coding") {
     const acceptPrefix = firstMatchingPrefix(tokens, config.acceptEditsPrefixes);
     if (acceptPrefix) {
-      return { behavior: "allow", reason: `matched coding accept-edits prefix '${acceptPrefix}'`, command: subcommand, normalized };
+      return {
+        behavior: "allow",
+        reason: `matched coding accept-edits prefix '${acceptPrefix}'`,
+        command: subcommand,
+        normalized,
+      };
     }
   }
 
@@ -1211,13 +1393,27 @@ function classifySafetySubcommand(subcommand, config) {
     return { ...rmDecision, command: subcommand, normalized };
   }
 
-  const askRegex = firstMatchingAskRegex(normalized || subcommand, config.askRegexes, config.sandboxActive === true);
+  const askRegex = firstMatchingAskRegex(
+    normalized || subcommand,
+    config.askRegexes,
+    config.sandboxActive === true,
+  );
   if (askRegex) {
-    return { behavior: "ask", reason: `matched ask regex /${askRegex}/`, command: subcommand, normalized };
+    return {
+      behavior: "ask",
+      reason: `matched ask regex /${askRegex}/`,
+      command: subcommand,
+      normalized,
+    };
   }
 
   if (config.sandboxActive !== true && hasNonNullOutputRedirection(subcommand)) {
-    return { behavior: "ask", reason: "writes output via shell redirection", command: subcommand, normalized };
+    return {
+      behavior: "ask",
+      reason: "writes output via shell redirection",
+      command: subcommand,
+      normalized,
+    };
   }
 
   return { behavior: "allow", reason: "no safety prompt needed", command: subcommand, normalized };
@@ -1230,8 +1426,14 @@ export function classifyBashSafety(command, userConfig = {}) {
     return { behavior: "allow", reason: "empty command", command: trimmed, subcommands: [] };
   }
 
-  const rawAskRegex = firstMatchingAskRegex(trimmed, config.askRegexes, config.sandboxActive === true);
-  const subcommands = splitShellCommand(trimmed).map((subcommand) => classifySafetySubcommand(subcommand, config));
+  const rawAskRegex = firstMatchingAskRegex(
+    trimmed,
+    config.askRegexes,
+    config.sandboxActive === true,
+  );
+  const subcommands = splitShellCommand(trimmed).map((subcommand) =>
+    classifySafetySubcommand(subcommand, config),
+  );
 
   const denied = subcommands.find((part) => part.behavior === "deny");
   if (denied) {
@@ -1248,7 +1450,7 @@ export function classifyBashSafety(command, userConfig = {}) {
       behavior: "ask",
       reason: `matched raw ask regex /${rawAskRegex}/`,
       command: trimmed,
-      subcommands
+      subcommands,
     };
   }
 
@@ -1268,22 +1470,28 @@ export function classifyBashCommand(command, userConfig = {}) {
       behavior: "deny",
       reason: `matched raw deny regex /${rawDenyRegex}/`,
       command: trimmed,
-      subcommands: []
+      subcommands: [],
     };
   }
 
-  const rawAskRegex = firstMatchingAskRegex(trimmed, config.askRegexes, config.sandboxActive === true);
+  const rawAskRegex = firstMatchingAskRegex(
+    trimmed,
+    config.askRegexes,
+    config.sandboxActive === true,
+  );
   const deniedSubstitution = firstDeniedCommandSubstitution(trimmed, config);
   if (deniedSubstitution) {
     return {
       behavior: "deny",
       reason: `command substitution contains denied command: ${deniedSubstitution.reason}`,
       command: trimmed,
-      subcommands: deniedSubstitution.subcommands ?? []
+      subcommands: deniedSubstitution.subcommands ?? [],
     };
   }
 
-  const subcommands = splitShellCommand(trimmed).map((subcommand) => classifySubcommand(subcommand, config));
+  const subcommands = splitShellCommand(trimmed).map((subcommand) =>
+    classifySubcommand(subcommand, config),
+  );
 
   const denied = subcommands.find((part) => part.behavior === "deny");
   if (denied) {
@@ -1300,7 +1508,7 @@ export function classifyBashCommand(command, userConfig = {}) {
       behavior: "ask",
       reason: `matched raw ask regex /${rawAskRegex}/`,
       command: trimmed,
-      subcommands
+      subcommands,
     };
   }
 
@@ -1308,7 +1516,8 @@ export function classifyBashCommand(command, userConfig = {}) {
 }
 
 export function suggestClaudeAllowRule(decision) {
-  const target = decision.subcommands?.find((part) => part.behavior === "ask") ?? decision.subcommands?.[0];
+  const target =
+    decision.subcommands?.find((part) => part.behavior === "ask") ?? decision.subcommands?.[0];
   if (target?.allowPersistentApproval === false) return undefined;
 
   const normalized = target?.normalized || target?.command || decision.command;
@@ -1330,13 +1539,14 @@ export function suggestClaudeAllowRule(decision) {
 export function formatDecision(decision) {
   const lines = [
     `${decision.behavior.toUpperCase()}: ${decision.reason}`,
-    `Command: ${decision.command}`
+    `Command: ${decision.command}`,
   ];
 
   if (decision.subcommands?.length) {
     lines.push("Subcommands:");
     for (const part of decision.subcommands) {
-      const normalized = part.normalized && part.normalized !== part.command ? ` [${part.normalized}]` : "";
+      const normalized =
+        part.normalized && part.normalized !== part.command ? ` [${part.normalized}]` : "";
       lines.push(`- ${part.behavior}: ${part.command}${normalized} — ${part.reason}`);
     }
   }
