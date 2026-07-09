@@ -8,6 +8,12 @@ export const DEFAULT_CONFIG = {
   noUiAskDecision: "deny",
   autoApproveAsk: false,
   sandboxToggleShortcut: "ctrl+shift+p",
+  auditLog: {
+    enabled: true,
+    directory: undefined,
+    fileNamePrefix: "audit",
+    maxCommandPreviewChars: 240
+  },
   safeWrappers: DEFAULT_SAFE_WRAPPERS,
   allowPrefixes: [
     "pwd",
@@ -175,6 +181,12 @@ export function mergeConfig(base = DEFAULT_CONFIG, override = {}) {
         merged.sandbox[key] = [...baseValues, ...overrideSandbox[key]];
       }
     }
+  }
+
+  if (base.auditLog || override.auditLog) {
+    const baseAuditLog = base.auditLog && typeof base.auditLog === "object" ? base.auditLog : {};
+    const overrideAuditLog = override.auditLog && typeof override.auditLog === "object" ? override.auditLog : {};
+    merged.auditLog = { ...baseAuditLog, ...overrideAuditLog };
   }
 
   return merged;

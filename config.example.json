@@ -3,6 +3,12 @@
   "noUiAskDecision": "deny",
   "autoApproveAsk": false,
   "sandboxToggleShortcut": "ctrl+shift+p",
+  "auditLog": {
+    "enabled": true,
+    "directory": "~/.pi/agent/claude-style-permissions/audit",
+    "fileNamePrefix": "audit",
+    "maxCommandPreviewChars": 240
+  },
   "importClaudeCodeSettings": true,
   "persistApprovalsToClaudeCodeSettings": true,
   "writeClaudeCodeSettingsPath": ".claude/settings.local.json",
